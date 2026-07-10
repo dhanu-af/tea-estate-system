@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% block title %}Dashboard · DKNS Tea Lands{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Dashboard</h1>
+    <p class="subtitle">Overview for {{ today }}</p>
+  </div>
+  <a class="btn" href="{{ url_for('income') }}">Set Today's Tea Price &amp; View Profit</a>
+</div>
+
+<div class="cards">
+  <div class="card">
+    <div class="stat">{{ employee_count }}</div>
+    <div class="label">Registered employees</div>
+  </div>
+  <div class="card">
+    <div class="stat">{{ marked_today }}</div>
+    <div class="label">Attendance marked today</div>
+  </div>
+  <div class="card">
+    <div class="stat">{{ today_summary.get('Present', 0) }}</div>
+    <div class="label">Present today</div>
+  </div>
+  <div class="card">
+    <div class="stat">{{ today_summary.get('Absent', 0) }}</div>
+    <div class="label">Absent today</div>
+  </div>
+  <div class="card">
+    <div class="stat">{{ harvest_today }}</div>
+    <div class="label">Harvest collected today (kg)</div>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>Recently registered employees</h2>
+  {% if recent_employees %}
+  <table>
+    <thead><tr><th>ID</th><th>Name</th><th>Position</th><th>Division</th></tr></thead>
+    <tbody>
+      {% for e in recent_employees %}
+      <tr>
+        <td><a href="{{ url_for('employee_edit', employee_id=e['id']) }}">{{ e['employee_number'] }}</a></td>
+        <td>{{ e['full_name'] }}</td>
+        <td>{{ e['job_position'] or '—' }}</td>
+        <td>{{ e['estate_division'] or '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty-state">No employees registered yet. <a href="{{ url_for('employee_new') }}">Register the first one</a>.</div>
+  {% endif %}
+</div>
+
+<div class="panel">
+  <h2>Recent attendance</h2>
+  {% if recent_attendance %}
+  <table>
+    <thead><tr><th>Date</th><th>Employee</th><th>Status</th><th>Check-in</th><th>Check-out</th></tr></thead>
+    <tbody>
+      {% for a in recent_attendance %}
+      <tr>
+        <td>{{ a['date'] }}</td>
+        <td>{{ a['full_name'] }} <small>({{ a['employee_number'] }})</small></td>
+        <td><span class="badge badge-{{ a['status']|lower|replace(' ', '-') }}">{{ a['status'] }}</span></td>
+        <td>{{ a['check_in'] or '—' }}</td>
+        <td>{{ a['check_out'] or '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty-state">No attendance recorded yet. <a href="{{ url_for('attendance_new') }}">Log attendance</a>.</div>
+  {% endif %}
+</div>
+
+<div class="panel">
+  <h2>Recent work &amp; harvest</h2>
+  {% if recent_assignments %}
+  <table>
+    <thead><tr><th>Date</th><th>Employee</th><th>Task</th><th>Target</th><th>Actual</th><th>Productivity</th><th>Status</th></tr></thead>
+    <tbody>
+      {% for a in recent_assignments %}
+      <tr>
+        <td>{{ a['date'] }}</td>
+        <td><a href="{{ url_for('work_assignment_detail', assignment_id=a['id']) }}">{{ a['full_name'] }}</a> <small>({{ a['employee_number'] }})</small></td>
+        <td>{{ a['task_type'] }}</td>
+        <td>{{ a['harvest_target'] if a['harvest_target'] is not none else '—' }}</td>
+        <td>{{ a['actual_output'] }}</td>
+        <td>{{ (a['productivity_score']|string ~ '%') if a['productivity_score'] is not none else '—' }}</td>
+        <td><span class="badge badge-{{ a['status']|lower|replace(' ', '-') }}">{{ a['status'] }}</span></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty-state">No work assignments yet. <a href="{{ url_for('work_assignment_new') }}">Create the first one</a>.</div>
+  {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Employees · DKNS Tea Lands{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Employees</h1>
+    <p class="subtitle">All registered estate staff</p>
+  </div>
+  <a class="btn" href="{{ url_for('employee_new') }}">+ Register Employee</a>
+</div>
+
+<form class="search-bar" method="get">
+  <input type="text" name="q" placeholder="Search by name, ID, or position" value="{{ q }}">
+  <button class="btn btn-secondary" type="submit">Search</button>
+</form>
+
+<div class="panel">
+  {% if employees %}
+  <table>
+    <thead>
+      <tr>
+        <th>Employee ID</th>
+        <th>Name</th>
+        <th>Position</th>
+        <th>Division</th>
+        <th>Employment Type</th>
+        <th>Pay Cycle</th>
+        <th>Phone</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for e in employees %}
+      <tr>
+        <td>{{ e['employee_number'] }}</td>
+        <td>{{ e['full_name'] }}</td>
+        <td>{{ e['job_position'] or '—' }}</td>
+        <td>{{ e['estate_division'] or '—' }}</td>
+        <td>{{ e['employment_type'] or '—' }}</td>
+        <td>{{ e['pay_cycle'] or '—' }}</td>
+        <td>{{ e['phone_number'] or '—' }}</td>
+        <td class="actions-row">
+          <a class="btn btn-secondary btn-sm" href="{{ url_for('employee_edit', employee_id=e['id']) }}">Edit</a>
+          <form method="post" action="{{ url_for('employee_delete', employee_id=e['id']) }}" onsubmit="return confirm('Remove {{ e['full_name'] }}?');">
+            <button class="btn btn-danger btn-sm" type="submit">Delete</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty-state">
+    {% if q %}No employees match "{{ q }}".{% else %}No employees registered yet.{% endif %}
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}DKNS Tea Lands{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="brand">🍃 DKNS Tea Lands<span>Employee &amp; Attendance</span></div>
+      <nav>
+        <a href="{{ url_for('dashboard') }}" class="{{ 'active' if request.endpoint == 'dashboard' }}">Dashboard</a>
+        <a href="{{ url_for('employee_list') }}" class="{{ 'active' if request.endpoint and request.endpoint.startswith('employee') }}">Employees</a>
+        <a href="{{ url_for('attendance_list') }}" class="{{ 'active' if request.endpoint and request.endpoint.startswith('attendance') }}">Attendance</a>
+        <a href="{{ url_for('work_assignment_list') }}" class="{{ 'active' if request.endpoint and request.endpoint.startswith('work_assignment') }}">Work &amp; Harvest</a>
+        <a href="{{ url_for('payroll') }}" class="{{ 'active' if request.endpoint == 'payroll' }}">Payroll</a>
+        <a href="{{ url_for('income') }}" class="{{ 'active' if request.endpoint and request.endpoint.startswith('income') }}">Income &amp; Profit</a>
+      </nav>
+      <div style="margin-top:auto; padding:16px 20px; border-top:1px solid rgba(255,255,255,0.15);">
+        {% if session.get('username') %}
+        <div style="color:rgba(255,255,255,0.7); font-size:0.8rem; margin-bottom:8px;">Signed in as {{ session['username'] }}</div>
+        {% endif %}
+        <form method="post" action="{{ url_for('logout') }}">
+          <button type="submit" class="btn btn-secondary btn-sm" style="width:100%;">Log out</button>
+        </form>
+      </div>
+    </aside>
+    <main class="main">
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+          {% for category, message in messages %}
+            <div class="flash flash-{{ category }}">{{ message }}</div>
+          {% endfor %}
+        {% endif %}
+      {% endwith %}
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+</body>
+</html>

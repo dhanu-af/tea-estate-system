@@ -1,0 +1,16 @@
+# Database (contains real employee/payroll data — never commit this)
+tea_estate.db
+*.db
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Virtual environments
+venv/
+.venv/
+
+# OS
+.DS_Store
+Thumbs.db

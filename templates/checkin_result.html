@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Check-in · DKNS Tea Lands</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <style>
+    body { display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 20px; }
+    .kiosk-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 32px 28px;
+      max-width: 420px;
+      width: 100%;
+      text-align: center;
+    }
+    .kiosk-icon { font-size: 3rem; margin-bottom: 8px; }
+    .kiosk-card h1 { font-size: 1.4rem; margin: 0 0 4px; }
+    .kiosk-card .sub { color: var(--muted); margin-bottom: 20px; }
+    .kiosk-detail { text-align: left; background: var(--tea-green-light); border-radius: var(--radius); padding: 14px 16px; margin-top: 16px; }
+    .kiosk-detail div { display: flex; justify-content: space-between; padding: 4px 0; font-size: 0.9rem; }
+    .kiosk-detail div span:first-child { color: var(--muted); }
+  </style>
+</head>
+<body>
+  <div class="kiosk-card">
+    {% if not employee %}
+    <div class="kiosk-icon">⚠️</div>
+    <h1>Employee not found</h1>
+    <p class="sub">This QR code doesn't match any registered employee.</p>
+    {% else %}
+      {% if action == 'checked_in' %}
+      <div class="kiosk-icon">✅</div>
+      <h1>Checked in</h1>
+      <p class="sub">{{ now_time }} · Verified by QR code</p>
+      {% elif action == 'checked_out' %}
+      <div class="kiosk-icon">👋</div>
+      <h1>Checked out</h1>
+      <p class="sub">{{ now_time }} · Verified by QR code</p>
+      {% else %}
+      <div class="kiosk-icon">ℹ️</div>
+      <h1>Already checked out today</h1>
+      <p class="sub">See your supervisor if this isn't right.</p>
+      {% endif %}
+
+      <div class="kiosk-detail">
+        <div><span>Name</span><span>{{ employee['full_name'] }}</span></div>
+        <div><span>Employee ID</span><span>{{ employee['employee_number'] }}</span></div>
+        <div><span>Position</span><span>{{ employee['job_position'] or '—' }}</span></div>
+        <div><span>Division</span><span>{{ employee['estate_division'] or '—' }}</span></div>
+        {% if todays_task %}
+        <div><span>Today's task</span><span>{{ todays_task['task_type'] }}</span></div>
+        <div><span>Field/Block</span><span>{{ todays_task['field_block'] or '—' }}</span></div>
+        <div><span>Target</span><span>{{ todays_task['harvest_target'] if todays_task['harvest_target'] is not none else '—' }} kg</span></div>
+        {% endif %}
+      </div>
+    {% endif %}
+  </div>
+</body>
+</html>

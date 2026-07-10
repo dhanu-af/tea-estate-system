@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}Work & Harvest · DKNS Tea Lands{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Work &amp; Harvest</h1>
+    <p class="subtitle">Daily task assignments and harvest output</p>
+  </div>
+  <a class="btn" href="{{ url_for('work_assignment_new') }}">+ New Assignment</a>
+</div>
+
+<form class="search-bar" method="get">
+  <input type="date" name="date" value="{{ date_filter }}">
+  <button class="btn btn-secondary" type="submit">Filter</button>
+  {% if date_filter %}<a class="btn btn-secondary" href="{{ url_for('work_assignment_list') }}">Clear</a>{% endif %}
+</form>
+
+<div class="panel">
+  {% if assignments %}
+  <table>
+    <thead>
+      <tr>
+        <th>Date</th>
+        <th>Employee</th>
+        <th>Task</th>
+        <th>Field/Block</th>
+        <th>Target (kg)</th>
+        <th>Actual (kg)</th>
+        <th>Productivity</th>
+        <th>Status</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for a in assignments %}
+      <tr>
+        <td>{{ a['date'] }}</td>
+        <td>{{ a['full_name'] }} <small>({{ a['employee_number'] }})</small></td>
+        <td>{{ a['task_type'] }}</td>
+        <td>{{ a['field_block'] or '—' }}</td>
+        <td>{{ a['harvest_target'] if a['harvest_target'] is not none else '—' }}</td>
+        <td>{{ a['actual_output'] }}</td>
+        <td>{{ (a['productivity_score']|string ~ '%') if a['productivity_score'] is not none else '—' }}</td>
+        <td><span class="badge badge-{{ a['status']|lower|replace(' ', '-') }}">{{ a['status'] }}</span></td>
+        <td class="actions-row">
+          <a class="btn btn-secondary btn-sm" href="{{ url_for('work_assignment_detail', assignment_id=a['id']) }}">Open</a>
+          <form method="post" action="{{ url_for('work_assignment_delete', assignment_id=a['id']) }}" onsubmit="return confirm('Delete this assignment?');">
+            <button class="btn btn-danger btn-sm" type="submit">Delete</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty-state">
+    {% if date_filter %}No assignments for {{ date_filter }}.{% else %}No work assignments yet.{% endif %}
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,154 @@
+{% extends "base.html" %}
+{% block title %}Payroll · DKNS Tea Lands{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Payroll</h1>
+    <p class="subtitle">Harvest pay (kg &times; rate/kg) + time-based pay (hours &times; hourly rate), for the selected period</p>
+  </div>
+  <a class="btn" href="{{ url_for('payroll_export', **{'from': date_from, 'to': date_to}) }}">Export CSV</a>
+</div>
+
+<form class="search-bar" method="get">
+  <input type="date" name="from" value="{{ date_from }}">
+  <input type="date" name="to" value="{{ date_to }}">
+  <button class="btn btn-secondary" type="submit">Update</button>
+</form>
+
+<div class="cards">
+  <div class="card">
+    <div class="stat">{{ total_payment }}</div>
+    <div class="label">Total payroll ({{ date_from }} to {{ date_to }})</div>
+  </div>
+  <div class="card">
+    <div class="stat">{{ total_advances }}</div>
+    <div class="label">Salary advances already paid</div>
+  </div>
+  <div class="card">
+    <div class="stat">{{ total_employee_epf }}</div>
+    <div class="label">Employee EPF deducted (8%)</div>
+  </div>
+  <div class="card">
+    <div class="stat">{{ total_net_pay }}</div>
+    <div class="label">Net still owed</div>
+  </div>
+  <div class="card">
+    <div class="stat">{{ total_employer_epf_etf }}</div>
+    <div class="label">Employer EPF (12%) + ETF (3%) &mdash; extra cost to the estate, not deducted from pay</div>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>Record a salary advance</h2>
+  <p class="subtitle" style="margin-top:-6px;">For employees who took an advance against their pay &mdash; it's deducted from their Total Pay below as Net Pay.</p>
+  {% if not employees %}
+  <div class="empty-state">You need to <a href="{{ url_for('employee_new') }}">register an employee</a> first.</div>
+  {% else %}
+  <form method="post" action="{{ url_for('payroll_add_advance') }}" class="form-grid" style="margin-top:14px;">
+    <div class="field">
+      <label>Employee</label>
+      <select name="employee_id" required>
+        <option value="">Select employee</option>
+        {% for e in employees %}
+        <option value="{{ e['id'] }}">{{ e['full_name'] }} ({{ e['employee_number'] }})</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="field">
+      <label>Date</label>
+      <input type="date" name="date" value="{{ date_to }}" required>
+    </div>
+    <div class="field">
+      <label>Amount</label>
+      <input type="number" step="0.01" min="0" name="amount" placeholder="e.g. 2000.00" required>
+    </div>
+    <div class="field" style="grid-column: span 2;">
+      <label>Note (optional)</label>
+      <input type="text" name="note" placeholder="e.g. Requested for medical expenses">
+    </div>
+    <div class="field" style="align-self:end;">
+      <button class="btn" type="submit">Record Advance</button>
+    </div>
+  </form>
+  {% endif %}
+</div>
+
+<div class="panel">
+  <h2>Advances from {{ date_from }} to {{ date_to }}</h2>
+  {% if advances %}
+  <table>
+    <thead><tr><th>Date</th><th>Employee</th><th>Amount</th><th>Note</th><th></th></tr></thead>
+    <tbody>
+      {% for a in advances %}
+      <tr>
+        <td>{{ a['date'] }}</td>
+        <td>{{ a['full_name'] }} <small>({{ a['employee_number'] }})</small></td>
+        <td>{{ a['amount'] }}</td>
+        <td>{{ a['note'] or '—' }}</td>
+        <td>
+          <form method="post" action="{{ url_for('payroll_delete_advance', advance_id=a['id']) }}" onsubmit="return confirm('Remove this advance?');">
+            <button class="btn btn-danger btn-sm" type="submit">Delete</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty-state">No advances recorded between {{ date_from }} and {{ date_to }}.</div>
+  {% endif %}
+</div>
+
+<div class="panel">
+  {% if rows %}
+  <table>
+    <thead>
+      <tr>
+        <th>Employee</th>
+        <th>Present days</th>
+        <th>Hours worked</th>
+        <th>Hourly rate</th>
+        <th>Time-based pay</th>
+        <th>Harvest (kg)</th>
+        <th>Rate/kg</th>
+        <th>Bonus kg</th>
+        <th>Harvest pay</th>
+        <th>Total pay</th>
+        <th>Advance</th>
+        <th>EPF (8%)</th>
+        <th>Net pay</th>
+        <th title="Employer EPF 12% + ETF 3%, not deducted from the employee">Employer EPF+ETF</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td><a href="{{ url_for('employee_edit', employee_id=r['id']) }}">{{ r['full_name'] }}</a> <small>({{ r['employee_number'] }})</small></td>
+        <td>{{ r['present_days'] }}</td>
+        <td>{{ r['total_hours'] }}</td>
+        <td>{{ r['hourly_rate'] if r['hourly_rate'] is not none else '—' }}</td>
+        <td>{{ r['hourly_pay'] if r['hourly_pay'] is not none else '—' }}</td>
+        <td>{{ r['total_output'] }}</td>
+        <td>{{ r['rate_per_kg'] if r['rate_per_kg'] is not none else '—' }}</td>
+        <td>{{ r['bonus_kg'] if r['bonus_kg'] else '—' }}</td>
+        <td>{{ r['harvest_payment'] if r['harvest_payment'] is not none else '—' }}</td>
+        <td><strong>{{ r['total_pay'] if r['total_pay'] is not none else 'Set a rate on employee' }}</strong></td>
+        <td>{{ r['advance_total'] if r['advance_total'] else '—' }}</td>
+        <td>{{ r['employee_epf'] if r['employee_epf'] else '—' }}</td>
+        <td style="color: {{ 'var(--danger)' if r['net_pay'] is not none and r['net_pay'] < 0 else 'inherit' }};">
+          {{ r['net_pay'] if r['net_pay'] is not none else '—' }}
+        </td>
+        <td>{{ ((r['employer_epf'] or 0) + (r['employer_etf'] or 0))|round(2) if r['epf_etf_applicable'] else '—' }}</td>
+        <td>
+          <a class="btn btn-secondary btn-sm" href="{{ url_for('payroll_payslip', employee_id=r['id'], **{'from': date_from, 'to': date_to}) }}">Payslip</a>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty-state">No employees registered yet.</div>
+  {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Edit' if mode == 'edit' else 'Log' }} Attendance · DKNS Tea Lands{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>{{ 'Edit Attendance' if mode == 'edit' else 'Log Attendance' }}</h1>
+    <p class="subtitle">Record check-in, check-out, breaks, and status</p>
+  </div>
+  <a class="btn btn-secondary" href="{{ url_for('attendance_list') }}">← Back to list</a>
+</div>
+
+<div class="panel">
+  {% if not employees %}
+  <div class="empty-state">You need to <a href="{{ url_for('employee_new') }}">register an employee</a> before logging attendance.</div>
+  {% else %}
+  <form class="stack" method="post">
+    {% if mode == 'edit' %}
+    <input type="hidden" name="expected_updated_at" value="{{ record.get('updated_at') or '' }}">
+    {% endif %}
+    <div class="form-grid">
+      <div class="field">
+        <label>Employee *</label>
+        <select name="employee_id" required>
+          <option value="">Select employee</option>
+          {% for e in employees %}
+          <option value="{{ e['id'] }}" {{ 'selected' if (record.get('employee_id')|string) == (e['id']|string) }}>{{ e['full_name'] }} ({{ e['employee_number'] }})</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label>Date *</label>
+        <input type="date" name="date" value="{{ record.get('date', '') }}" required>
+      </div>
+      <div class="field">
+        <label>Status *</label>
+        <select name="status" required>
+          <option value="">Select</option>
+          {% for s in attendance_statuses %}
+          <option value="{{ s }}" {{ 'selected' if record.get('status') == s }}>{{ s }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label>Verification Method</label>
+        <select name="verification_method">
+          <option value="">Select</option>
+          {% for v in verification_methods %}
+          <option value="{{ v }}" {{ 'selected' if record.get('verification_method') == v }}>{{ v }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label>Check-in time</label>
+        <input type="time" name="check_in" value="{{ record.get('check_in', '') }}">
+      </div>
+      <div class="field">
+        <label>Check-out time</label>
+        <input type="time" name="check_out" value="{{ record.get('check_out', '') }}">
+      </div>
+      <div class="field">
+        <label>Break start</label>
+        <input type="time" name="break_start" value="{{ record.get('break_start', '') }}">
+      </div>
+      <div class="field">
+        <label>Break end</label>
+        <input type="time" name="break_end" value="{{ record.get('break_end', '') }}">
+      </div>
+    </div>
+
+    <div class="actions-row">
+      <button class="btn" type="submit">{{ 'Save Changes' if mode == 'edit' else 'Log Attendance' }}</button>
+      <a class="btn btn-secondary" href="{{ url_for('attendance_list') }}">Cancel</a>
+    </div>
+  </form>
+  {% endif %}
+</div>
+{% endblock %}

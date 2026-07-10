@@ -1,0 +1,209 @@
+{% extends "base.html" %}
+{% block title %}Income & Profit · DKNS Tea Lands{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Income &amp; Profit</h1>
+    <p class="subtitle">Income = each day's harvest &times; that day's tea price (prices vary daily). Profit = Income &minus; total cost.</p>
+  </div>
+</div>
+
+<div class="search-bar" style="flex-wrap: wrap;">
+  <a class="btn {{ 'btn-secondary' if view != 'daily' }}" href="{{ url_for('income', view='daily', date=selected_date) }}">Daily</a>
+  <a class="btn {{ 'btn-secondary' if view != 'weekly' }}" href="{{ url_for('income', view='weekly', date=selected_date) }}">Weekly</a>
+  <a class="btn {{ 'btn-secondary' if view != 'monthly' }}" href="{{ url_for('income', view='monthly', date=selected_date) }}">Monthly</a>
+  <a class="btn {{ 'btn-secondary' if view != 'custom' }}" href="{{ url_for('income', view='custom', **{'from': date_from, 'to': date_to}) }}">Custom</a>
+</div>
+
+<form class="search-bar" method="get">
+  <input type="hidden" name="view" value="{{ view }}">
+  {% if view == 'custom' %}
+  <input type="date" name="from" value="{{ date_from }}">
+  <input type="date" name="to" value="{{ date_to }}">
+  {% else %}
+  <input type="date" name="date" value="{{ selected_date }}">
+  {% endif %}
+  <button class="btn btn-secondary" type="submit">View</button>
+</form>
+
+<p class="subtitle">Showing {{ date_from }} to {{ date_to }}{% if date_from == date_to %} (1 day){% endif %}</p>
+
+{% if unpriced_kg %}
+<div class="flash flash-error">{{ unpriced_kg }} kg harvested on days with no price set — income for those days is not counted below. Set a price for each day below to include it.</div>
+{% endif %}
+
+<div class="panel">
+  <h2>Set tea price for a day</h2>
+  <p class="subtitle" style="margin-top:-6px;">Tea price changes daily &mdash; set it per day. Pick any date, even outside the range shown above.</p>
+  <form method="post" action="{{ url_for('income_set_price') }}" class="form-grid" style="margin-top:14px;">
+    <div class="field">
+      <label>Date</label>
+      <input type="date" name="date" value="{{ selected_date }}" required>
+    </div>
+    <div class="field">
+      <label>Price per kg</label>
+      <input type="number" step="0.01" min="0" name="price_per_kg" value="{{ price_per_kg or '' }}" placeholder="e.g. 280.00" required>
+    </div>
+    <div class="field" style="align-self:end;">
+      <button class="btn" type="submit">{{ 'Update Price' if price_per_kg is not none else 'Set Price' }}</button>
+    </div>
+  </form>
+</div>
+
+<div class="cards">
+  <div class="card">
+    <div class="stat">{{ harvest_kg }}</div>
+    <div class="label">Harvest collected (kg)</div>
+  </div>
+  <div class="card">
+    {% if view == 'daily' %}
+    <div class="stat">{{ price_per_kg if price_per_kg is not none else '—' }}</div>
+    <div class="label">Tea price / kg</div>
+    {% else %}
+    <div class="stat">{{ avg_price if avg_price is not none else '—' }}</div>
+    <div class="label">Avg. price / kg (priced days only)</div>
+    {% endif %}
+  </div>
+  <div class="card">
+    <div class="stat">{{ income_total if income_total is not none else '—' }}</div>
+    <div class="label">Income {% if income_total is none %}(set a price above){% endif %}</div>
+  </div>
+  <div class="card">
+    <div class="stat">{{ employee_cost }}</div>
+    <div class="label">Employee pay {% if employee_cost_percent is not none %}({{ employee_cost_percent }}% of cost){% endif %}</div>
+  </div>
+  <div class="card">
+    <div class="stat">{{ expense_total }}</div>
+    <div class="label">Other expenses {% if expense_total_percent is not none %}({{ expense_total_percent }}% of cost){% endif %}</div>
+  </div>
+  <div class="card">
+    <div class="stat">{{ total_cost }}</div>
+    <div class="label">Total cost (100%)</div>
+  </div>
+  <div class="card">
+    <div class="stat" style="color: {{ 'var(--tea-green-dark)' if profit is not none and profit >= 0 else 'var(--danger)' if profit is not none else 'inherit' }};">
+      {{ profit if profit is not none else '—' }}
+    </div>
+    <div class="label">{{ 'Profit' if profit is none or profit >= 0 else 'Loss' }}</div>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>Add an expense</h2>
+  <p class="subtitle" style="margin-top:-6px;">For occasional costs like fertilizer or transport &mdash; only add one when it actually happens, not every day.</p>
+  <form method="post" action="{{ url_for('income_add_expense') }}" class="form-grid" style="margin-top:14px;">
+    <div class="field">
+      <label>Date</label>
+      <input type="date" name="date" value="{{ selected_date }}" required>
+    </div>
+    <div class="field">
+      <label>Category</label>
+      <select name="category" required>
+        <option value="">Select</option>
+        {% for c in expense_categories %}
+        <option value="{{ c }}">{{ c }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="field">
+      <label>Amount</label>
+      <input type="number" step="0.01" min="0" name="amount" placeholder="e.g. 1500.00" required>
+    </div>
+    <div class="field" style="grid-column: span 2;">
+      <label>Note (optional)</label>
+      <input type="text" name="note" placeholder="e.g. Diesel for the lorry">
+    </div>
+    <div class="field" style="align-self:end;">
+      <button class="btn" type="submit">Add Expense</button>
+    </div>
+  </form>
+</div>
+
+<div class="panel">
+  <h2>Expenses from {{ date_from }} to {{ date_to }}</h2>
+  {% if expenses %}
+  <table>
+    <thead><tr><th>Date</th><th>Category</th><th>Amount</th><th>% of total cost</th><th>Note</th><th></th></tr></thead>
+    <tbody>
+      {% for e in expenses %}
+      <tr>
+        <td>{{ e['date'] }}</td>
+        <td>{{ e['category'] }}</td>
+        <td>{{ e['amount'] }}</td>
+        <td>{{ (e['percent']|string ~ '%') if e['percent'] is not none else '—' }}</td>
+        <td>{{ e['note'] or '—' }}</td>
+        <td>
+          <form method="post" action="{{ url_for('income_delete_expense', expense_id=e['id']) }}" onsubmit="return confirm('Remove this expense?');">
+            <button class="btn btn-danger btn-sm" type="submit">Delete</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty-state">No expenses logged between {{ date_from }} and {{ date_to }}.</div>
+  {% endif %}
+</div>
+
+<div class="panel">
+  <h2>Cost breakdown</h2>
+  {% if cost_breakdown %}
+  <table>
+    <thead><tr><th>Category</th><th>Amount</th><th>% of total cost</th></tr></thead>
+    <tbody>
+      {% for c in cost_breakdown %}
+      <tr>
+        <td>{{ c['label'] }}</td>
+        <td>{{ c['amount'] }}</td>
+        <td>
+          <div style="display:flex; align-items:center; gap:8px;">
+            <div style="flex:1; background:var(--tea-green-light); border-radius:4px; height:8px; overflow:hidden;">
+              <div style="width:{{ c['percent'] }}%; background:var(--tea-green); height:100%;"></div>
+            </div>
+            <span style="white-space:nowrap;">{{ c['percent'] }}%</span>
+          </div>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty-state">No costs recorded between {{ date_from }} and {{ date_to }} yet.</div>
+  {% endif %}
+</div>
+
+<div class="panel">
+  <h2>Individual employee income</h2>
+  {% if breakdown %}
+  <table>
+    <thead>
+      <tr>
+        <th>Employee</th>
+        <th>Harvest (kg)</th>
+        <th>Income share (kg &times; price)</th>
+        <th>Pay (cost)</th>
+        <th>% of total cost</th>
+        <th>Profit contribution</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for b in breakdown %}
+      <tr>
+        <td><a href="{{ url_for('employee_edit', employee_id=b['id']) }}">{{ b['full_name'] }}</a> <small>({{ b['employee_number'] }})</small></td>
+        <td>{{ b['kg'] }}</td>
+        <td>{{ b['income_share'] if b['income_share'] is not none else '—' }}</td>
+        <td>{{ b['cost'] if b['cost'] is not none else '—' }}</td>
+        <td>{{ (b['cost_percent']|string ~ '%') if b['cost_percent'] is not none else '—' }}</td>
+        <td style="color: {{ 'var(--tea-green-dark)' if b['profit_share'] is not none and b['profit_share'] >= 0 else 'var(--danger)' if b['profit_share'] is not none else 'inherit' }};">
+          {{ b['profit_share'] if b['profit_share'] is not none else '—' }}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty-state">No harvest or attendance activity recorded between {{ date_from }} and {{ date_to }}.</div>
+  {% endif %}
+</div>
+{% endblock %}

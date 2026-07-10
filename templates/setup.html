@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Set up admin account · DKNS Tea Lands</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <style>
+    body { display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 20px; }
+    .auth-card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 32px 28px; max-width: 380px; width: 100%; }
+    .auth-card h1 { font-size: 1.3rem; margin: 0 0 4px; }
+    .auth-card p.sub { color: var(--muted); margin: 0 0 20px; font-size: 0.9rem; }
+    .auth-card form { display: flex; flex-direction: column; gap: 14px; }
+    .auth-card label { font-size: 0.82rem; font-weight: 600; color: var(--muted); margin-bottom: 5px; display: block; }
+    .auth-card input { width: 100%; padding: 9px 10px; border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.9rem; }
+    .auth-card .btn { width: 100%; text-align: center; }
+  </style>
+</head>
+<body>
+  <div class="auth-card">
+    <h1>🍃 Create the admin account</h1>
+    <p class="sub">First-time setup for DKNS Tea Lands. This account will be used to log in and manage the system.</p>
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        {% for category, message in messages %}
+          <div class="flash flash-{{ category }}">{{ message }}</div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
+    <form method="post">
+      <div>
+        <label>Username</label>
+        <input type="text" name="username" required autofocus>
+      </div>
+      <div>
+        <label>Password</label>
+        <input type="password" name="password" required>
+      </div>
+      <div>
+        <label>Confirm Password</label>
+        <input type="password" name="confirm_password" required>
+      </div>
+      <button class="btn" type="submit">Create account</button>
+    </form>
+  </div>
+</body>
+</html>

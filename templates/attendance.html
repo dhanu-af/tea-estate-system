@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}Attendance · DKNS Tea Lands{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Attendance</h1>
+    <p class="subtitle">Daily attendance records</p>
+  </div>
+  <a class="btn" href="{{ url_for('attendance_new') }}">+ Log Attendance</a>
+</div>
+
+<form class="search-bar" method="get">
+  <input type="date" name="date" value="{{ date_filter }}">
+  <button class="btn btn-secondary" type="submit">Filter</button>
+  {% if date_filter %}<a class="btn btn-secondary" href="{{ url_for('attendance_list') }}">Clear</a>{% endif %}
+</form>
+
+<div class="panel">
+  {% if records %}
+  <table>
+    <thead>
+      <tr>
+        <th>Date</th>
+        <th>Employee</th>
+        <th>Check-in</th>
+        <th>Check-out</th>
+        <th>Break</th>
+        <th>Net Hours</th>
+        <th>Status</th>
+        <th>Verification</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for a in records %}
+      <tr>
+        <td>{{ a['date'] }}</td>
+        <td>{{ a['full_name'] }} <small>({{ a['employee_number'] }})</small></td>
+        <td>{{ a['check_in'] or '—' }}</td>
+        <td>{{ a['check_out'] or '—' }}</td>
+        <td>{{ a['total_break_hours'] if a['total_break_hours'] is not none else '—' }}</td>
+        <td>{{ a['total_work_hours'] if a['total_work_hours'] is not none else '—' }}</td>
+        <td><span class="badge badge-{{ a['status']|lower|replace(' ', '-') }}">{{ a['status'] }}</span></td>
+        <td>{{ a['verification_method'] or '—' }}</td>
+        <td class="actions-row">
+          <a class="btn btn-secondary btn-sm" href="{{ url_for('attendance_edit', record_id=a['id']) }}">Edit</a>
+          <form method="post" action="{{ url_for('attendance_delete', record_id=a['id']) }}" onsubmit="return confirm('Delete this record?');">
+            <button class="btn btn-danger btn-sm" type="submit">Delete</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty-state">
+    {% if date_filter %}No attendance records for {{ date_filter }}.{% else %}No attendance recorded yet.{% endif %}
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

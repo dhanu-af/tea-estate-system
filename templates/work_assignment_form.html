@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}New Assignment · DKNS Tea Lands{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>New Work Assignment</h1>
+    <p class="subtitle">Assign a task and daily harvest target</p>
+  </div>
+  <a class="btn btn-secondary" href="{{ url_for('work_assignment_list') }}">← Back to list</a>
+</div>
+
+<div class="panel">
+  {% if not employees %}
+  <div class="empty-state">You need to <a href="{{ url_for('employee_new') }}">register an employee</a> before creating an assignment.</div>
+  {% else %}
+  <form class="stack" method="post">
+    <div class="form-grid">
+      <div class="field">
+        <label>Employee *</label>
+        <select name="employee_id" required>
+          <option value="">Select employee</option>
+          {% for e in employees %}
+          <option value="{{ e['id'] }}" {{ 'selected' if (assignment.get('employee_id')|string) == (e['id']|string) }}>{{ e['full_name'] }} ({{ e['employee_number'] }})</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label>Date *</label>
+        <input type="date" name="date" value="{{ assignment.get('date', '') }}" required>
+      </div>
+      <div class="field">
+        <label>Task Type *</label>
+        <select name="task_type" required>
+          <option value="">Select</option>
+          {% for t in task_types %}
+          <option value="{{ t }}" {{ 'selected' if assignment.get('task_type') == t }}>{{ t }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label>Field / Block</label>
+        <input type="text" name="field_block" value="{{ assignment.get('field_block', '') }}">
+      </div>
+      <div class="field">
+        <label>Harvest Target (kg)</label>
+        <input type="number" step="0.1" min="0" name="harvest_target" value="{{ assignment.get('harvest_target', '') }}">
+      </div>
+    </div>
+
+    <div class="actions-row">
+      <button class="btn" type="submit">Create Assignment</button>
+      <a class="btn btn-secondary" href="{{ url_for('work_assignment_list') }}">Cancel</a>
+    </div>
+  </form>
+  {% endif %}
+</div>
+{% endblock %}

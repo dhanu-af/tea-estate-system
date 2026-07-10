@@ -1,0 +1,168 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Edit' if mode == 'edit' else 'Register' }} Employee · DKNS Tea Lands{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>{{ 'Edit Employee' if mode == 'edit' else 'Register Employee' }}</h1>
+    <p class="subtitle">{{ employee['employee_number'] if mode == 'edit' else 'Create a digital profile for a new employee' }}</p>
+  </div>
+  <a class="btn btn-secondary" href="{{ url_for('employee_list') }}">← Back to list</a>
+</div>
+
+{% if mode == 'edit' %}
+<div class="panel" style="display:flex; align-items:center; gap:20px; flex-wrap:wrap;">
+  <img src="{{ url_for('employee_badge', employee_id=employee_id) }}" alt="QR check-in badge" width="120" height="120" style="border:1px solid var(--border); border-radius:8px;">
+  <div>
+    <h2 style="margin:0 0 4px;">QR check-in badge</h2>
+    <p class="subtitle" style="margin:0 0 8px;">Print this and give it to {{ employee['full_name'] }}. Scanning it with any phone camera opens the check-in page and logs attendance automatically.</p>
+    <a class="btn btn-secondary btn-sm" href="{{ url_for('employee_badge', employee_id=employee_id) }}" download="{{ employee['employee_number'] }}-badge.png">Download badge</a>
+  </div>
+</div>
+{% endif %}
+
+<div class="panel">
+  <form class="stack" method="post">
+    {% if mode == 'edit' %}
+    <input type="hidden" name="expected_updated_at" value="{{ employee.get('updated_at') or '' }}">
+    {% endif %}
+    <div class="field-section">
+      <h3>Basic Details</h3>
+      <div class="form-grid">
+        <div class="field">
+          <label>Full Name *</label>
+          <input type="text" name="full_name" value="{{ employee.get('full_name', '') }}" required>
+        </div>
+        <div class="field">
+          <label>National ID Number</label>
+          <input type="text" name="national_id" value="{{ employee.get('national_id', '') }}">
+        </div>
+        <div class="field">
+          <label>Date of Birth</label>
+          <input type="date" name="date_of_birth" value="{{ employee.get('date_of_birth', '') }}">
+        </div>
+        <div class="field">
+          <label>Gender</label>
+          <select name="gender">
+            <option value="">Select</option>
+            {% for g in ['Male', 'Female', 'Other'] %}
+            <option value="{{ g }}" {{ 'selected' if employee.get('gender') == g }}>{{ g }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="field">
+          <label>Phone Number</label>
+          <input type="text" name="phone_number" value="{{ employee.get('phone_number', '') }}">
+        </div>
+        <div class="field">
+          <label>Emergency Contact</label>
+          <input type="text" name="emergency_contact" value="{{ employee.get('emergency_contact', '') }}">
+        </div>
+        <div class="field" style="grid-column: 1 / -1;">
+          <label>Address</label>
+          <input type="text" name="address" value="{{ employee.get('address', '') }}">
+        </div>
+      </div>
+    </div>
+
+    <div class="field-section">
+      <h3>Employment Details</h3>
+      <div class="form-grid">
+        <div class="field">
+          <label>Job Position</label>
+          <select name="job_position">
+            <option value="">Select</option>
+            {% for p in job_positions %}
+            <option value="{{ p }}" {{ 'selected' if employee.get('job_position') == p }}>{{ p }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="field">
+          <label>Department</label>
+          <input type="text" name="department" value="{{ employee.get('department', '') }}">
+        </div>
+        <div class="field">
+          <label>Estate/Division Name</label>
+          <input type="text" name="estate_division" value="{{ employee.get('estate_division', '') }}">
+        </div>
+        <div class="field">
+          <label>Start Date</label>
+          <input type="date" name="start_date" value="{{ employee.get('start_date', '') }}">
+        </div>
+        <div class="field">
+          <label>Employment Type</label>
+          <select name="employment_type">
+            <option value="">Select</option>
+            {% for t in employment_types %}
+            <option value="{{ t }}" {{ 'selected' if employee.get('employment_type') == t }}>{{ t }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="field">
+          <label>Work Experience</label>
+          <input type="text" name="work_experience" value="{{ employee.get('work_experience', '') }}" placeholder="e.g. 3 years">
+        </div>
+        <div class="field" style="grid-column: 1 / -1;">
+          <label>Skills / Training Certificates</label>
+          <input type="text" name="skills_certificates" value="{{ employee.get('skills_certificates', '') }}">
+        </div>
+        <div class="field">
+          <label>Salary Type</label>
+          <input type="text" name="salary_type" value="{{ employee.get('salary_type', '') }}" placeholder="e.g. Fixed, Piece-rate">
+        </div>
+        <div class="field">
+          <label>Pay Cycle</label>
+          <select name="pay_cycle">
+            <option value="">Select</option>
+            {% for c in pay_cycles %}
+            <option value="{{ c }}" {{ 'selected' if employee.get('pay_cycle') == c }}>{{ c }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="field">
+          <label>Rate per kg (harvest pay)</label>
+          <input type="number" step="0.01" min="0" name="rate_per_kg" value="{{ employee.get('rate_per_kg') or '' }}" placeholder="e.g. 50.00">
+        </div>
+        <div class="field">
+          <label>Hourly Rate (time-based pay)</label>
+          <input type="number" step="0.01" min="0" name="hourly_rate" value="{{ employee.get('hourly_rate') or '' }}" placeholder="e.g. 150.00">
+        </div>
+        <div class="field">
+          <label>Over-target Commission %</label>
+          <input type="number" step="0.1" min="0" name="over_target_commission_percent" value="{{ employee.get('over_target_commission_percent') or '' }}" placeholder="e.g. 20">
+        </div>
+        <div class="field" style="display:flex; align-items:center; gap:8px; padding-top:22px;">
+          <input type="checkbox" name="epf_etf_applicable" id="epf_etf_applicable" value="1" style="width:auto;" {{ 'checked' if employee.get('epf_etf_applicable') }}>
+          <label for="epf_etf_applicable" style="margin:0;">EPF/ETF applicable (EPF 8% deducted from pay; employer pays 12% EPF + 3% ETF separately)</label>
+        </div>
+      </div>
+    </div>
+
+    <div class="actions-row">
+      <button class="btn" type="submit">{{ 'Save Changes' if mode == 'edit' else 'Register Employee' }}</button>
+      <a class="btn btn-secondary" href="{{ url_for('employee_list') }}">Cancel</a>
+    </div>
+  </form>
+</div>
+
+{% if mode == 'edit' and recent_work %}
+<div class="panel">
+  <h2>Recent work &amp; harvest output</h2>
+  <p class="subtitle" style="margin-top:-6px;">Updates automatically whenever a harvest weighing is recorded.</p>
+  <table style="margin-top:14px;">
+    <thead><tr><th>Date</th><th>Task</th><th>Target (kg)</th><th>Actual (kg)</th><th>Productivity</th><th>Status</th></tr></thead>
+    <tbody>
+      {% for w in recent_work %}
+      <tr>
+        <td><a href="{{ url_for('work_assignment_detail', assignment_id=w['id']) }}">{{ w['date'] }}</a></td>
+        <td>{{ w['task_type'] }}</td>
+        <td>{{ w['harvest_target'] if w['harvest_target'] is not none else '—' }}</td>
+        <td>{{ w['actual_output'] }}</td>
+        <td>{{ (w['productivity_score']|string ~ '%') if w['productivity_score'] is not none else '—' }}</td>
+        <td><span class="badge badge-{{ w['status']|lower|replace(' ', '-') }}">{{ w['status'] }}</span></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+{% endblock %}
