@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Factories · DKNS Tea Lands{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Factories</h1>
+    <p class="subtitle">Factories your tea is delivered to for processing.</p>
+  </div>
+  <a class="btn" href="{{ url_for('factory_new') }}">Add Factory</a>
+</div>
+
+<div class="panel">
+  {% if factories %}
+  <table>
+    <thead><tr><th>Name</th><th>Contact</th><th>Phone</th><th>Default price/kg</th><th>Deliveries</th><th></th></tr></thead>
+    <tbody>
+      {% for f in factories %}
+      <tr>
+        <td>{{ f['name'] }}</td>
+        <td>{{ f['contact_person'] or '—' }}</td>
+        <td>{{ f['phone_number'] or '—' }}</td>
+        <td>{{ f['default_price_per_kg'] if f['default_price_per_kg'] is not none else '—' }}</td>
+        <td>{{ f['delivery_count'] }}</td>
+        <td style="display:flex; gap:8px;">
+          <a class="btn btn-secondary btn-sm" href="{{ url_for('factory_edit', factory_id=f['id']) }}">Edit</a>
+          <form method="post" action="{{ url_for('factory_delete', factory_id=f['id']) }}" onsubmit="return confirm('Delete this factory?');">
+            <button class="btn btn-danger btn-sm" type="submit">Delete</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty-state">No factories added yet.</div>
+  {% endif %}
+</div>
+{% endblock %}

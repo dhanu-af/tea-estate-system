@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% block title %}Finance & Factory · DKNS Tea Lands{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Finance &amp; Factory</h1>
+    <p class="subtitle">Factory deliveries, invoices, payments, and overall profit/loss in one place.</p>
+  </div>
+</div>
+
+<div class="search-bar" style="flex-wrap: wrap;">
+  <a class="btn {{ 'btn-secondary' if view != 'daily' }}" href="{{ url_for('finance_dashboard', view='daily', date=selected_date) }}">Daily</a>
+  <a class="btn {{ 'btn-secondary' if view != 'weekly' }}" href="{{ url_for('finance_dashboard', view='weekly', date=selected_date) }}">Weekly</a>
+  <a class="btn {{ 'btn-secondary' if view != 'monthly' }}" href="{{ url_for('finance_dashboard', view='monthly', date=selected_date) }}">Monthly</a>
+  <a class="btn {{ 'btn-secondary' if view != 'custom' }}" href="{{ url_for('finance_dashboard', view='custom', **{'from': date_from, 'to': date_to}) }}">Custom</a>
+</div>
+
+<form class="search-bar" method="get">
+  <input type="hidden" name="view" value="{{ view }}">
+  {% if view == 'custom' %}
+  <input type="date" name="from" value="{{ date_from }}">
+  <input type="date" name="to" value="{{ date_to }}">
+  {% else %}
+  <input type="date" name="date" value="{{ selected_date }}">
+  {% endif %}
+  <button class="btn btn-secondary" type="submit">View</button>
+</form>
+
+<p class="subtitle">Showing {{ date_from }} to {{ date_to }}{% if date_from == date_to %} (1 day){% endif %}</p>
+
+<div class="search-bar" style="flex-wrap: wrap;">
+  <a class="btn" href="{{ url_for('factory_list') }}">Factories</a>
+  <a class="btn" href="{{ url_for('delivery_list') }}">Deliveries</a>
+  <a class="btn" href="{{ url_for('invoice_list') }}">Invoices</a>
+</div>
+
+<div class="cards">
+  <div class="card">
+    <div class="stat">{{ deliveries_count }}</div>
+    <div class="label">Deliveries ({{ deliveries_weight }} kg)</div>
+  </div>
+  <div class="card">
+    <div class="stat">{{ total_invoiced_weight }}</div>
+    <div class="label">Weight invoiced (kg)</div>
+  </div>
+  <div class="card">
+    <div class="stat">{{ total_revenue }}</div>
+    <div class="label">Revenue invoiced</div>
+  </div>
+  <div class="card">
+    <div class="stat">{{ payments_received }}</div>
+    <div class="label">Payments received</div>
+  </div>
+  <div class="card">
+    <div class="stat">{{ outstanding_receivables }}</div>
+    <div class="label">Outstanding receivables (all-time)</div>
+  </div>
+  <div class="card">
+    <div class="stat">{{ payroll_cost }}</div>
+    <div class="label">Payroll cost</div>
+  </div>
+  <div class="card">
+    <div class="stat">{{ expense_total }}</div>
+    <div class="label">Other expenses</div>
+  </div>
+  <div class="card">
+    <div class="stat">{{ total_cost }}</div>
+    <div class="label">Total cost</div>
+  </div>
+  <div class="card">
+    <div class="stat" style="color: {{ 'var(--tea-green-dark)' if net_profit >= 0 else 'var(--danger)' }};">
+      {{ net_profit }}
+    </div>
+    <div class="label">{{ 'Profit' if net_profit >= 0 else 'Loss' }} (revenue &minus; cost)</div>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>Recent invoices</h2>
+  {% if recent_invoices %}
+  <table>
+    <thead><tr><th>Invoice #</th><th>Date</th><th>Factory</th><th>Weight (kg)</th><th>Price/kg</th><th>Total</th><th>Status</th></tr></thead>
+    <tbody>
+      {% for i in recent_invoices %}
+      <tr>
+        <td><a href="{{ url_for('invoice_detail', invoice_id=i['id']) }}">{{ i['invoice_number'] }}</a></td>
+        <td>{{ i['invoice_date'] }}</td>
+        <td>{{ i['factory_name'] }}</td>
+        <td>{{ i['total_weight'] }}</td>
+        <td>{{ i['price_per_kg'] }}</td>
+        <td>{{ i['total_amount'] }}</td>
+        <td>{{ i['status'] }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty-state">No invoices in this date range yet.</div>
+  {% endif %}
+</div>
+{% endblock %}

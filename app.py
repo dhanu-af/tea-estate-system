@@ -1,5 +1,5 @@
 import io
-import sqlite3
+import os
 from datetime import datetime
 
 import qrcode
@@ -10,6 +10,7 @@ from database import (
     get_connection,
     close_connection,
     init_db,
+    IntegrityError,
     JOB_POSITIONS,
     EMPLOYMENT_TYPES,
     PAY_CYCLES,
@@ -18,6 +19,8 @@ from database import (
     TASK_TYPES,
     WORK_STATUSES,
     EXPENSE_CATEGORIES,
+    PAYMENT_METHODS,
+    INVOICE_STATUSES,
 )
 from utils import (
     compute_attendance_hours,
@@ -28,8 +31,13 @@ from utils import (
 )
 
 app = Flask(__name__)
-app.secret_key = "tea-estate-dev-secret"
+app.secret_key = os.environ.get("SECRET_KEY", "tea-estate-dev-secret")
 app.teardown_appcontext(close_connection)
+
+# Create tables on cold start. Safe to call repeatedly (CREATE TABLE IF NOT EXISTS) —
+# needed because on Vercel this module is only ever imported, never run as __main__.
+with app.app_context():
+    init_db()
 
 PUBLIC_ENDPOINTS = {"checkin", "employee_badge", "login", "setup", "static"}
 
@@ -82,6 +90,8 @@ def inject_lookups():
         task_types=TASK_TYPES,
         work_statuses=WORK_STATUSES,
         expense_categories=EXPENSE_CATEGORIES,
+        payment_methods=PAYMENT_METHODS,
+        invoice_statuses=INVOICE_STATUSES,
     )
 
 
@@ -161,7 +171,7 @@ def setup():
                 (username, generate_password_hash(password)),
             )
             conn.commit()
-        except sqlite3.IntegrityError:
+        except IntegrityError:
             flash("That username is already taken.", "error")
             return render_template("setup.html")
 
@@ -1223,7 +1233,594 @@ def income_set_price():
     return redirect(url_for("income", date=date_value))
 
 
+# ---------- Finance & Factory ----------
+
+
+@app.route("/finance")
+def finance_dashboard():
+    view, date_from, date_to, anchor_date = _income_date_range()
+
+    conn = get_connection()
+
+    revenue_row = conn.execute(
+        """SELECT COALESCE(SUM(total_amount), 0) AS total, COALESCE(SUM(total_weight), 0) AS weight
+           FROM invoices WHERE invoice_date BETWEEN ? AND ?""",
+        (date_from, date_to),
+    ).fetchone()
+    total_revenue = revenue_row["total"]
+    total_invoiced_weight = revenue_row["weight"]
+
+    payments_received = conn.execute(
+        "SELECT COALESCE(SUM(amount), 0) AS total FROM invoice_payments WHERE payment_date BETWEEN ? AND ?",
+        (date_from, date_to),
+    ).fetchone()["total"]
+
+    outstanding_receivables = conn.execute(
+        """SELECT COALESCE(SUM(i.total_amount - COALESCE(p.paid, 0)), 0) AS total
+           FROM invoices i
+           LEFT JOIN (SELECT invoice_id, SUM(amount) AS paid FROM invoice_payments GROUP BY invoice_id) p
+             ON p.invoice_id = i.id
+           WHERE i.status != 'Paid'"""
+    ).fetchone()["total"]
+
+    deliveries_row = conn.execute(
+        """SELECT COUNT(*) AS c, COALESCE(SUM(factory_weight), 0) AS weight
+           FROM factory_deliveries WHERE delivery_date BETWEEN ? AND ?""",
+        (date_from, date_to),
+    ).fetchone()
+
+    expense_total = conn.execute(
+        "SELECT COALESCE(SUM(amount), 0) AS total FROM expenses WHERE date BETWEEN ? AND ?", (date_from, date_to)
+    ).fetchone()["total"]
+
+    payroll_rows = _compute_payroll_rows(date_from, date_to)
+    payroll_cost = sum(r["true_labor_cost"] for r in payroll_rows if r["true_labor_cost"]) or 0
+
+    total_cost = round(expense_total + payroll_cost, 2)
+    net_profit = round(total_revenue - total_cost, 2)
+
+    recent_invoices = conn.execute(
+        """SELECT i.*, f.name AS factory_name FROM invoices i JOIN factories f ON f.id = i.factory_id
+           WHERE i.invoice_date BETWEEN ? AND ? ORDER BY i.invoice_date DESC, i.id DESC LIMIT 10""",
+        (date_from, date_to),
+    ).fetchall()
+
+    return render_template(
+        "finance_dashboard.html",
+        view=view,
+        selected_date=anchor_date,
+        date_from=date_from,
+        date_to=date_to,
+        total_revenue=round(total_revenue, 2),
+        total_invoiced_weight=round(total_invoiced_weight, 2),
+        payments_received=round(payments_received, 2),
+        outstanding_receivables=round(outstanding_receivables, 2),
+        deliveries_count=deliveries_row["c"],
+        deliveries_weight=round(deliveries_row["weight"], 2),
+        expense_total=round(expense_total, 2),
+        payroll_cost=round(payroll_cost, 2),
+        total_cost=total_cost,
+        net_profit=net_profit,
+        recent_invoices=recent_invoices,
+    )
+
+
+@app.route("/finance/factories")
+def factory_list():
+    conn = get_connection()
+    factories = conn.execute(
+        """SELECT f.*,
+                  (SELECT COUNT(*) FROM factory_deliveries d WHERE d.factory_id = f.id) AS delivery_count
+           FROM factories f ORDER BY f.name"""
+    ).fetchall()
+    return render_template("factories.html", factories=factories)
+
+
+@app.route("/finance/factories/new", methods=["GET", "POST"])
+def factory_new():
+    if request.method == "POST":
+        name = request.form.get("name", "").strip()
+        contact_person = request.form.get("contact_person", "").strip() or None
+        phone_number = request.form.get("phone_number", "").strip() or None
+        address = request.form.get("address", "").strip() or None
+        default_price_value = request.form.get("default_price_per_kg", "").strip()
+
+        if not name:
+            flash("Factory name is required.", "error")
+            return render_template("factory_form.html", factory=request.form, mode="new")
+
+        try:
+            default_price_per_kg = float(default_price_value) if default_price_value else None
+        except ValueError:
+            flash("Default price must be a number.", "error")
+            return render_template("factory_form.html", factory=request.form, mode="new")
+
+        conn = get_connection()
+        try:
+            conn.execute(
+                """INSERT INTO factories (name, contact_person, phone_number, address, default_price_per_kg)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (name, contact_person, phone_number, address, default_price_per_kg),
+            )
+            conn.commit()
+        except IntegrityError:
+            flash("A factory with that name already exists.", "error")
+            return render_template("factory_form.html", factory=request.form, mode="new")
+
+        flash(f"Factory {name} added.", "success")
+        return redirect(url_for("factory_list"))
+
+    return render_template("factory_form.html", factory={}, mode="new")
+
+
+@app.route("/finance/factories/<int:factory_id>/edit", methods=["GET", "POST"])
+def factory_edit(factory_id):
+    conn = get_connection()
+    factory = conn.execute("SELECT * FROM factories WHERE id = ?", (factory_id,)).fetchone()
+    if not factory:
+        flash("Factory not found.", "error")
+        return redirect(url_for("factory_list"))
+
+    if request.method == "POST":
+        name = request.form.get("name", "").strip()
+        contact_person = request.form.get("contact_person", "").strip() or None
+        phone_number = request.form.get("phone_number", "").strip() or None
+        address = request.form.get("address", "").strip() or None
+        default_price_value = request.form.get("default_price_per_kg", "").strip()
+
+        if not name:
+            flash("Factory name is required.", "error")
+            merged = dict(factory)
+            merged.update(request.form)
+            return render_template("factory_form.html", factory=merged, mode="edit", factory_id=factory_id)
+
+        try:
+            default_price_per_kg = float(default_price_value) if default_price_value else None
+        except ValueError:
+            flash("Default price must be a number.", "error")
+            merged = dict(factory)
+            merged.update(request.form)
+            return render_template("factory_form.html", factory=merged, mode="edit", factory_id=factory_id)
+
+        try:
+            conn.execute(
+                """UPDATE factories SET name=?, contact_person=?, phone_number=?, address=?, default_price_per_kg=?
+                   WHERE id=?""",
+                (name, contact_person, phone_number, address, default_price_per_kg, factory_id),
+            )
+            conn.commit()
+        except IntegrityError:
+            flash("A factory with that name already exists.", "error")
+            merged = dict(factory)
+            merged.update(request.form)
+            return render_template("factory_form.html", factory=merged, mode="edit", factory_id=factory_id)
+
+        flash("Factory updated.", "success")
+        return redirect(url_for("factory_list"))
+
+    return render_template("factory_form.html", factory=dict(factory), mode="edit", factory_id=factory_id)
+
+
+@app.route("/finance/factories/<int:factory_id>/delete", methods=["POST"])
+def factory_delete(factory_id):
+    conn = get_connection()
+    try:
+        conn.execute("DELETE FROM factories WHERE id = ?", (factory_id,))
+        conn.commit()
+    except IntegrityError:
+        flash("Cannot delete a factory that has deliveries or invoices recorded.", "error")
+        return redirect(url_for("factory_list"))
+    flash("Factory removed.", "success")
+    return redirect(url_for("factory_list"))
+
+
+@app.route("/finance/deliveries")
+def delivery_list():
+    date_filter = request.args.get("date", "").strip()
+    conn = get_connection()
+    query = """SELECT d.*, f.name AS factory_name FROM factory_deliveries d
+               JOIN factories f ON f.id = d.factory_id"""
+    params = []
+    if date_filter:
+        query += " WHERE d.delivery_date = ?"
+        params.append(date_filter)
+    query += " ORDER BY d.delivery_date DESC, d.id DESC"
+    deliveries = conn.execute(query, params).fetchall()
+    return render_template("deliveries.html", deliveries=deliveries, date_filter=date_filter)
+
+
+@app.route("/finance/deliveries/new", methods=["GET", "POST"])
+def delivery_new():
+    conn = get_connection()
+    factories = conn.execute("SELECT * FROM factories ORDER BY name").fetchall()
+
+    if request.method == "POST":
+        delivery_date = request.form.get("delivery_date", "").strip()
+        factory_id = request.form.get("factory_id", "").strip()
+        estate_weight_value = request.form.get("estate_weight", "").strip()
+        factory_weight_value = request.form.get("factory_weight", "").strip()
+        vehicle_number = request.form.get("vehicle_number", "").strip() or None
+        driver_name = request.form.get("driver_name", "").strip() or None
+        notes = request.form.get("notes", "").strip() or None
+
+        if not delivery_date or not factory_id:
+            flash("Date and factory are required.", "error")
+            return render_template("delivery_form.html", factories=factories, delivery=request.form, mode="new")
+
+        try:
+            factory_weight = float(factory_weight_value)
+            estate_weight = float(estate_weight_value) if estate_weight_value else None
+        except ValueError:
+            flash("Weights must be numbers.", "error")
+            return render_template("delivery_form.html", factories=factories, delivery=request.form, mode="new")
+
+        if estate_weight is None:
+            auto_row = conn.execute(
+                "SELECT SUM(actual_output) AS total FROM work_assignments WHERE date = ?", (delivery_date,)
+            ).fetchone()
+            estate_weight = auto_row["total"]
+
+        conn.execute(
+            """INSERT INTO factory_deliveries
+               (delivery_date, factory_id, estate_weight, factory_weight, vehicle_number, driver_name, notes)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (delivery_date, factory_id, estate_weight, factory_weight, vehicle_number, driver_name, notes),
+        )
+        conn.commit()
+        flash("Delivery recorded.", "success")
+        return redirect(url_for("delivery_list"))
+
+    return render_template("delivery_form.html", factories=factories, delivery={}, mode="new")
+
+
+@app.route("/finance/deliveries/<int:delivery_id>/delete", methods=["POST"])
+def delivery_delete(delivery_id):
+    conn = get_connection()
+    delivery = conn.execute("SELECT * FROM factory_deliveries WHERE id = ?", (delivery_id,)).fetchone()
+    if not delivery:
+        flash("Delivery not found.", "error")
+        return redirect(url_for("delivery_list"))
+    if delivery["invoice_id"]:
+        flash("This delivery is already on an invoice — remove it from the invoice first.", "error")
+        return redirect(url_for("delivery_list"))
+
+    conn.execute("DELETE FROM factory_deliveries WHERE id = ?", (delivery_id,))
+    conn.commit()
+    flash("Delivery removed.", "success")
+    return redirect(url_for("delivery_list"))
+
+
+@app.route("/finance/invoices")
+def invoice_list():
+    conn = get_connection()
+    invoices = conn.execute(
+        """SELECT i.*, f.name AS factory_name,
+                  COALESCE((SELECT SUM(amount) FROM invoice_payments WHERE invoice_id = i.id), 0) AS paid_total
+           FROM invoices i JOIN factories f ON f.id = i.factory_id
+           ORDER BY i.invoice_date DESC, i.id DESC"""
+    ).fetchall()
+    return render_template("invoices.html", invoices=invoices)
+
+
+@app.route("/finance/invoices/new", methods=["GET", "POST"])
+def invoice_new():
+    from datetime import date
+
+    conn = get_connection()
+    factories = conn.execute("SELECT * FROM factories ORDER BY name").fetchall()
+
+    if request.method == "POST":
+        factory_id = request.form.get("factory_id", "").strip()
+        date_from = request.form.get("from", "").strip()
+        date_to = request.form.get("to", "").strip()
+        delivery_ids_raw = request.form.getlist("delivery_ids")
+        invoice_number = request.form.get("invoice_number", "").strip()
+        invoice_date = request.form.get("invoice_date", "").strip()
+        price_value = request.form.get("price_per_kg", "").strip()
+
+        if not delivery_ids_raw:
+            flash("Select at least one delivery to invoice.", "error")
+            return redirect(url_for("invoice_new", factory_id=factory_id, **{"from": date_from, "to": date_to}))
+        if not invoice_number or not invoice_date:
+            flash("Invoice number and date are required.", "error")
+            return redirect(url_for("invoice_new", factory_id=factory_id, **{"from": date_from, "to": date_to}))
+        try:
+            price_per_kg = float(price_value)
+            delivery_ids = [int(x) for x in delivery_ids_raw]
+        except ValueError:
+            flash("Price per kg must be a number.", "error")
+            return redirect(url_for("invoice_new", factory_id=factory_id, **{"from": date_from, "to": date_to}))
+
+        placeholders = ",".join("?" * len(delivery_ids))
+        selected_deliveries = conn.execute(
+            f"SELECT * FROM factory_deliveries WHERE id IN ({placeholders}) AND invoice_id IS NULL",
+            delivery_ids,
+        ).fetchall()
+        if not selected_deliveries:
+            flash("Those deliveries are no longer available to invoice.", "error")
+            return redirect(url_for("invoice_list"))
+
+        total_weight = round(sum(d["factory_weight"] for d in selected_deliveries), 2)
+        total_amount = round(total_weight * price_per_kg, 2)
+
+        try:
+            cursor = conn.execute(
+                """INSERT INTO invoices (invoice_number, factory_id, invoice_date, price_per_kg, total_weight, total_amount)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (invoice_number, factory_id, invoice_date, price_per_kg, total_weight, total_amount),
+            )
+        except IntegrityError:
+            flash("An invoice with that number already exists.", "error")
+            return redirect(url_for("invoice_new", factory_id=factory_id, **{"from": date_from, "to": date_to}))
+
+        new_invoice_id = cursor.lastrowid
+        conn.execute(
+            f"UPDATE factory_deliveries SET invoice_id = ? WHERE id IN ({placeholders})",
+            [new_invoice_id] + delivery_ids,
+        )
+        conn.commit()
+        flash(f"Invoice {invoice_number} created: {total_weight} kg = {total_amount}.", "success")
+        return redirect(url_for("invoice_detail", invoice_id=new_invoice_id))
+
+    factory_id = request.args.get("factory_id", "").strip()
+    date_from = request.args.get("from", "").strip()
+    date_to = request.args.get("to", "").strip()
+
+    uninvoiced = []
+    selected_factory = None
+    if factory_id and date_from and date_to:
+        selected_factory = conn.execute("SELECT * FROM factories WHERE id = ?", (factory_id,)).fetchone()
+        uninvoiced = conn.execute(
+            """SELECT * FROM factory_deliveries
+               WHERE factory_id = ? AND invoice_id IS NULL AND delivery_date BETWEEN ? AND ?
+               ORDER BY delivery_date""",
+            (factory_id, date_from, date_to),
+        ).fetchall()
+
+    return render_template(
+        "invoice_form.html",
+        factories=factories,
+        factory_id=factory_id,
+        date_from=date_from,
+        date_to=date_to,
+        uninvoiced=uninvoiced,
+        default_price=selected_factory["default_price_per_kg"] if selected_factory else None,
+        today=date.today().isoformat(),
+    )
+
+
+@app.route("/finance/invoices/<int:invoice_id>")
+def invoice_detail(invoice_id):
+    conn = get_connection()
+    invoice = conn.execute(
+        """SELECT i.*, f.name AS factory_name FROM invoices i
+           JOIN factories f ON f.id = i.factory_id WHERE i.id = ?""",
+        (invoice_id,),
+    ).fetchone()
+    if not invoice:
+        flash("Invoice not found.", "error")
+        return redirect(url_for("invoice_list"))
+
+    deliveries = conn.execute(
+        "SELECT * FROM factory_deliveries WHERE invoice_id = ? ORDER BY delivery_date", (invoice_id,)
+    ).fetchall()
+    payments = conn.execute(
+        "SELECT * FROM invoice_payments WHERE invoice_id = ? ORDER BY payment_date DESC, id DESC", (invoice_id,)
+    ).fetchall()
+    paid_total = round(sum(p["amount"] for p in payments), 2)
+    balance_due = round(invoice["total_amount"] - paid_total, 2)
+
+    return render_template(
+        "invoice_detail.html",
+        invoice=invoice,
+        deliveries=deliveries,
+        payments=payments,
+        paid_total=paid_total,
+        balance_due=balance_due,
+    )
+
+
+@app.route("/finance/invoices/<int:invoice_id>/pdf")
+def invoice_pdf(invoice_id):
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import mm
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+
+    conn = get_connection()
+    invoice = conn.execute(
+        """SELECT i.*, f.name AS factory_name, f.contact_person, f.phone_number, f.address
+           FROM invoices i JOIN factories f ON f.id = i.factory_id WHERE i.id = ?""",
+        (invoice_id,),
+    ).fetchone()
+    if not invoice:
+        flash("Invoice not found.", "error")
+        return redirect(url_for("invoice_list"))
+
+    deliveries = conn.execute(
+        "SELECT * FROM factory_deliveries WHERE invoice_id = ? ORDER BY delivery_date", (invoice_id,)
+    ).fetchall()
+    payments = conn.execute(
+        "SELECT * FROM invoice_payments WHERE invoice_id = ? ORDER BY payment_date", (invoice_id,)
+    ).fetchall()
+    paid_total = round(sum(p["amount"] for p in payments), 2)
+    balance_due = round(invoice["total_amount"] - paid_total, 2)
+
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buffer, pagesize=A4, topMargin=20 * mm, bottomMargin=20 * mm, leftMargin=20 * mm, rightMargin=20 * mm
+    )
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle("InvoiceTitle", parent=styles["Title"], fontSize=18, spaceAfter=2)
+    sub_style = ParagraphStyle("InvoiceSub", parent=styles["Normal"], textColor=colors.HexColor("#6b7a67"))
+    green = colors.HexColor("#2f5d3a")
+    border = colors.HexColor("#dbe5d9")
+
+    elements = [
+        Paragraph("DKNS Tea Lands", title_style),
+        Paragraph(f"Invoice {invoice['invoice_number']}", sub_style),
+        Spacer(1, 10 * mm),
+    ]
+
+    info_table = Table(
+        [
+            ["Factory", invoice["factory_name"]],
+            ["Contact", invoice["contact_person"] or "—"],
+            ["Phone", invoice["phone_number"] or "—"],
+            ["Address", invoice["address"] or "—"],
+            ["Invoice date", invoice["invoice_date"]],
+            ["Status", invoice["status"]],
+        ],
+        colWidths=[40 * mm, 120 * mm],
+    )
+    info_table.setStyle(TableStyle([("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"), ("BOTTOMPADDING", (0, 0), (-1, -1), 4)]))
+    elements.append(info_table)
+    elements.append(Spacer(1, 8 * mm))
+
+    delivery_rows = [["Date", "Estate weight (kg)", "Factory weight (kg)", "Vehicle"]]
+    for d in deliveries:
+        delivery_rows.append(
+            [d["delivery_date"], d["estate_weight"] if d["estate_weight"] is not None else "—", d["factory_weight"], d["vehicle_number"] or "—"]
+        )
+    delivery_table = Table(delivery_rows, colWidths=[35 * mm, 40 * mm, 40 * mm, 45 * mm])
+    delivery_table.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, 0), green),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("GRID", (0, 0), (-1, -1), 0.5, border),
+                ("ALIGN", (1, 0), (2, -1), "RIGHT"),
+            ]
+        )
+    )
+    elements.append(delivery_table)
+    elements.append(Spacer(1, 8 * mm))
+
+    totals_rows = [
+        ["Total weight (kg)", invoice["total_weight"]],
+        ["Price per kg", invoice["price_per_kg"]],
+        ["Total amount", invoice["total_amount"]],
+        ["Paid so far", paid_total],
+        ["Balance due", balance_due],
+    ]
+    totals_table = Table(totals_rows, colWidths=[80 * mm, 40 * mm])
+    totals_table.setStyle(
+        TableStyle(
+            [
+                ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
+                ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
+                ("GRID", (0, 0), (-1, -1), 0.5, border),
+                ("ALIGN", (1, 0), (1, -1), "RIGHT"),
+            ]
+        )
+    )
+    elements.append(totals_table)
+
+    if payments:
+        elements.append(Spacer(1, 8 * mm))
+        payment_rows = [["Payment date", "Amount", "Method", "Reference"]]
+        for p in payments:
+            payment_rows.append([p["payment_date"], p["amount"], p["method"], p["reference_number"] or "—"])
+        payment_table = Table(payment_rows, colWidths=[35 * mm, 30 * mm, 40 * mm, 55 * mm])
+        payment_table.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, 0), green),
+                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                    ("GRID", (0, 0), (-1, -1), 0.5, border),
+                    ("ALIGN", (1, 0), (1, -1), "RIGHT"),
+                ]
+            )
+        )
+        elements.append(payment_table)
+
+    doc.build(elements)
+    buffer.seek(0)
+
+    return send_file(
+        buffer,
+        mimetype="application/pdf",
+        as_attachment=False,
+        download_name=f"invoice_{invoice['invoice_number']}.pdf",
+    )
+
+
+@app.route("/finance/invoices/<int:invoice_id>/delete", methods=["POST"])
+def invoice_delete(invoice_id):
+    conn = get_connection()
+    conn.execute("DELETE FROM invoices WHERE id = ?", (invoice_id,))
+    conn.commit()
+    flash("Invoice removed. Its deliveries are now available to invoice again.", "success")
+    return redirect(url_for("invoice_list"))
+
+
+def _recompute_invoice_status(conn, invoice_id, total_amount):
+    paid_total = conn.execute(
+        "SELECT COALESCE(SUM(amount), 0) AS total FROM invoice_payments WHERE invoice_id = ?", (invoice_id,)
+    ).fetchone()["total"]
+    if paid_total > 0 and paid_total >= total_amount:
+        new_status = "Paid"
+    elif paid_total > 0:
+        new_status = "Partially Paid"
+    else:
+        new_status = "Unpaid"
+    conn.execute("UPDATE invoices SET status = ? WHERE id = ?", (new_status, invoice_id))
+
+
+@app.route("/finance/invoices/<int:invoice_id>/payment", methods=["POST"])
+def invoice_add_payment(invoice_id):
+    conn = get_connection()
+    invoice = conn.execute("SELECT * FROM invoices WHERE id = ?", (invoice_id,)).fetchone()
+    if not invoice:
+        flash("Invoice not found.", "error")
+        return redirect(url_for("invoice_list"))
+
+    payment_date = request.form.get("payment_date", "").strip()
+    amount_value = request.form.get("amount", "").strip()
+    method = request.form.get("method", "").strip()
+    reference_number = request.form.get("reference_number", "").strip() or None
+    note = request.form.get("note", "").strip() or None
+
+    if not payment_date or method not in PAYMENT_METHODS:
+        flash("Payment date and a valid method are required.", "error")
+        return redirect(url_for("invoice_detail", invoice_id=invoice_id))
+
+    try:
+        amount = float(amount_value)
+    except ValueError:
+        flash("Payment amount must be a number.", "error")
+        return redirect(url_for("invoice_detail", invoice_id=invoice_id))
+
+    conn.execute(
+        """INSERT INTO invoice_payments (invoice_id, payment_date, amount, method, reference_number, note)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (invoice_id, payment_date, amount, method, reference_number, note),
+    )
+    _recompute_invoice_status(conn, invoice_id, invoice["total_amount"])
+    conn.commit()
+
+    flash(f"Payment of {amount} recorded via {method}.", "success")
+    return redirect(url_for("invoice_detail", invoice_id=invoice_id))
+
+
+@app.route("/finance/invoices/<int:invoice_id>/payment/<int:payment_id>/delete", methods=["POST"])
+def invoice_delete_payment(invoice_id, payment_id):
+    conn = get_connection()
+    invoice = conn.execute("SELECT * FROM invoices WHERE id = ?", (invoice_id,)).fetchone()
+    if not invoice:
+        flash("Invoice not found.", "error")
+        return redirect(url_for("invoice_list"))
+
+    conn.execute("DELETE FROM invoice_payments WHERE id = ? AND invoice_id = ?", (payment_id, invoice_id))
+    _recompute_invoice_status(conn, invoice_id, invoice["total_amount"])
+    conn.commit()
+
+    flash("Payment removed.", "success")
+    return redirect(url_for("invoice_detail", invoice_id=invoice_id))
+
+
 if __name__ == "__main__":
-    with app.app_context():
-        init_db()
     app.run(debug=True, host="0.0.0.0", port=5000)

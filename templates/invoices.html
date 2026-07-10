@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Invoices · DKNS Tea Lands{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Invoices</h1>
+    <p class="subtitle">Bill factories for delivered tea and track what's been paid.</p>
+  </div>
+  <a class="btn" href="{{ url_for('invoice_new') }}">Create Invoice</a>
+</div>
+
+<div class="panel">
+  {% if invoices %}
+  <table>
+    <thead><tr><th>Invoice #</th><th>Date</th><th>Factory</th><th>Weight (kg)</th><th>Price/kg</th><th>Total</th><th>Paid</th><th>Balance</th><th>Status</th><th></th></tr></thead>
+    <tbody>
+      {% for i in invoices %}
+      <tr>
+        <td><a href="{{ url_for('invoice_detail', invoice_id=i['id']) }}">{{ i['invoice_number'] }}</a></td>
+        <td>{{ i['invoice_date'] }}</td>
+        <td>{{ i['factory_name'] }}</td>
+        <td>{{ i['total_weight'] }}</td>
+        <td>{{ i['price_per_kg'] }}</td>
+        <td>{{ i['total_amount'] }}</td>
+        <td>{{ i['paid_total'] }}</td>
+        <td>{{ (i['total_amount'] - i['paid_total'])|round(2) }}</td>
+        <td>{{ i['status'] }}</td>
+        <td><a class="btn btn-secondary btn-sm" href="{{ url_for('invoice_pdf', invoice_id=i['id']) }}" target="_blank">Print</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty-state">No invoices created yet.</div>
+  {% endif %}
+</div>
+{% endblock %}

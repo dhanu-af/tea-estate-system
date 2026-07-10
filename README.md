@@ -12,6 +12,7 @@ A web app for managing tea estate employees, attendance, harvest collection, and
 - **Login** — a single admin account gates every management page; the QR check-in and badge pages stay public so employees never need credentials to check in
 - **Income & Profit** — set the tea selling price for any day (it changes daily); view Daily, Weekly (Mon–Sun), Monthly (calendar month), or a Custom date range. Income sums each day's harvest × *that day's* price (never a single price across a range), and flags any days in the range with no price set instead of guessing. Also shows Cost (employee pay + logged expenses), Profit/Loss, a per-employee income/profit breakdown, and a percentage-of-cost breakdown
 - **Expenses** — occasional costs (Fertilizer, Transport, Fuel, Food, Others) logged per date, only added when they actually happen; they fold into that day's total cost and profit calculation
+- **Finance & Factory** — manage the factories you deliver tea to, record each delivery (estate weight auto-fills from that day's harvest weighings, factory weight entered manually so any shortfall is visible), then bundle un-invoiced deliveries in a date range into an invoice at a chosen price/kg. Track payments (Cash/Cheque/Bank Transfer) against each invoice — status moves from Unpaid → Partially Paid → Paid automatically as payments are recorded/removed. A Daily/Weekly/Monthly/Custom dashboard shows revenue invoiced, payments received, outstanding receivables, payroll + expense cost, and net profit/loss, with a feed of recent invoices
 
 ## Requirements
 
@@ -45,7 +46,7 @@ pip install -r requirements-dev.txt
 python -m pytest tests/ -v
 ```
 
-Tests use a temporary SQLite database (never touches your real `tea_estate.db`) and cover auth, employee CRUD, attendance, the harvest weighing math from the spec, payroll calculations, and the QR check-in flow — including regression tests for bugs found during development (employee-number collisions after deletes, stale-edit conflicts, `None` leaking into form values).
+Tests use a temporary SQLite database (never touches your real `tea_estate.db`) and cover auth, employee CRUD, attendance, the harvest weighing math from the spec, payroll calculations, the QR check-in flow, and the Finance & Factory module (factory CRUD, delivery/invoice/payment flows, dashboard totals) — including regression tests for bugs found during development (employee-number collisions after deletes, stale-edit conflicts, `None` leaking into form values).
 
 ## What's not built yet
 
@@ -59,10 +60,27 @@ These need real hardware/decisions before they can be implemented:
 - Single admin account, no roles/permissions — anyone who logs in can view/edit everything. Fine for one office admin; not meant for many staff with different access levels.
 - Optimistic concurrency prevents two simultaneous edits from silently overwriting each other, but there's no true multi-user support (audit log, per-user attribution).
 - Uses Flask's built-in development server (`debug=True`) — fine for a single estate's internal use, but not hardened for public internet exposure.
-- Sessions use a hardcoded `app.secret_key` in `app.py` — fine for internal LAN use, but if you ever expose this beyond your local network, replace it with a real secret (e.g. from an environment variable).
-- **Only run one `python app.py` at a time.** SQLite only allows one writer; if you start it twice (e.g. from two terminals) you'll get `database is locked` errors. Stop a running instance with Ctrl+C before starting another, rather than opening a second terminal on top of it.
+- Sessions use `app.secret_key` from the `SECRET_KEY` environment variable, falling back to a hardcoded dev value if it's not set — fine for local/LAN use, but **set a real `SECRET_KEY` in Vercel's Project Settings → Environment Variables** before relying on this in production, or every server restart invalidates everyone's login session anyway.
+- **Only run one `python app.py` at a time locally.** SQLite only allows one writer; if you start it twice (e.g. from two terminals) you'll get `database is locked` errors. Stop a running instance with Ctrl+C before starting another, rather than opening a second terminal on top of it. (This doesn't apply on Vercel — see below, it uses Postgres there instead.)
 - EPF/ETF percentages (`EPF_EMPLOYEE_PERCENT`, `EPF_EMPLOYER_PERCENT`, `ETF_EMPLOYER_PERCENT` in `utils.py`) are hardcoded at the current standard Sri Lanka statutory rates (8% / 12% / 3%). If the government changes these rates, update the constants in `utils.py` — they apply to every EPF/ETF-enabled employee automatically.
 
 ## Database connection handling
 
-`database.get_connection()` caches one SQLite connection per request on Flask's `g`, and `app.py` registers `close_connection` via `app.teardown_appcontext()`. Flask guarantees teardown callbacks run even when a request raises an unhandled exception — so a crash can never leave a connection (and its lock) dangling. This replaced an earlier pattern of manually calling `conn.close()` at the end of each route, which silently leaked the connection (and the lock) whenever a route crashed before reaching that line.
+`database.get_connection()` caches one connection per request on Flask's `g`, and `app.py` registers `close_connection` via `app.teardown_appcontext()`. Flask guarantees teardown callbacks run even when a request raises an unhandled exception — so a crash can never leave a connection (and its lock) dangling. This replaced an earlier pattern of manually calling `conn.close()` at the end of each route, which silently leaked the connection (and the lock) whenever a route crashed before reaching that line.
+
+## Deploying to Vercel
+
+Vercel's serverless functions have no writable, persistent local disk — every invocation gets its own throwaway filesystem — so the local SQLite file (`tea_estate.db`) cannot be used there; the very first request would crash with `sqlite3.OperationalError: unable to open database file`. To fix this, `database.py` now runs in one of two modes:
+
+- **Locally / in tests**: no Postgres connection string is set in the environment, so it uses SQLite exactly as before — nothing changes for local development.
+- **On Vercel**: once a Postgres connection string is present in the environment (`POSTGRES_URL`, `DATABASE_URL`, or `POSTGRES_URL_NON_POOLING`), it switches to Postgres automatically. A small compatibility layer (`PGConnection` in `database.py`) lets every existing route keep using the same `conn.execute("... WHERE id = ?", (x,))` style calls unchanged — no route code had to change.
+
+**One-time setup, in the Vercel dashboard:**
+
+1. Open your project → **Storage** tab → **Create Database** → choose **Postgres** (Neon-backed).
+2. Connect it to this project. Vercel automatically adds a `POSTGRES_URL` (or `DATABASE_URL`) environment variable — no manual copy/paste needed.
+3. Still in **Project Settings → Environment Variables**, add one more: `SECRET_KEY` set to any long random string (used to sign login sessions).
+4. Redeploy (or just push a commit) — the next cold start runs `init_db()` automatically and creates all tables on the new Postgres database.
+5. Visit the site and go through **Create admin account** again — it's a fresh database, so the SQLite admin account you created locally doesn't carry over.
+
+Everything else (QR codes, CSV export, PDF payslips/invoices) is generated in-memory and was already Vercel-compatible; the database was the only local-file dependency.

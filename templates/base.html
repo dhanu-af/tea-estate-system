@@ -17,6 +17,7 @@
         <a href="{{ url_for('work_assignment_list') }}" class="{{ 'active' if request.endpoint and request.endpoint.startswith('work_assignment') }}">Work &amp; Harvest</a>
         <a href="{{ url_for('payroll') }}" class="{{ 'active' if request.endpoint == 'payroll' }}">Payroll</a>
         <a href="{{ url_for('income') }}" class="{{ 'active' if request.endpoint and request.endpoint.startswith('income') }}">Income &amp; Profit</a>
+        <a href="{{ url_for('finance_dashboard') }}" class="{{ 'active' if request.endpoint and (request.endpoint.startswith('finance') or request.endpoint.startswith('factory') or request.endpoint.startswith('delivery') or request.endpoint.startswith('invoice')) }}">Finance &amp; Factory</a>
       </nav>
       <div style="margin-top:auto; padding:16px 20px; border-top:1px solid rgba(255,255,255,0.15);">
         {% if session.get('username') %}

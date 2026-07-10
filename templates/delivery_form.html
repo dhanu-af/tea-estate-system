@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}Record Delivery · DKNS Tea Lands{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Record Factory Delivery</h1>
+    <p class="subtitle">Leave estate weight blank to auto-fill it from that day's harvest weighing totals.</p>
+  </div>
+</div>
+
+<div class="panel">
+  <form method="post" action="{{ url_for('delivery_new') }}" class="form-grid">
+    <div class="field">
+      <label>Date</label>
+      <input type="date" name="delivery_date" value="{{ delivery.get('delivery_date') or '' }}" required>
+    </div>
+    <div class="field">
+      <label>Factory</label>
+      <select name="factory_id" required>
+        <option value="">Select</option>
+        {% for f in factories %}
+        <option value="{{ f['id'] }}" {{ 'selected' if delivery.get('factory_id')|string == f['id']|string }}>{{ f['name'] }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="field">
+      <label>Estate weight (kg, optional)</label>
+      <input type="number" step="0.01" min="0" name="estate_weight" value="{{ delivery.get('estate_weight') or '' }}" placeholder="auto-filled if left blank">
+    </div>
+    <div class="field">
+      <label>Factory weight (kg)</label>
+      <input type="number" step="0.01" min="0" name="factory_weight" value="{{ delivery.get('factory_weight') or '' }}" required>
+    </div>
+    <div class="field">
+      <label>Vehicle number</label>
+      <input type="text" name="vehicle_number" value="{{ delivery.get('vehicle_number') or '' }}">
+    </div>
+    <div class="field">
+      <label>Driver name</label>
+      <input type="text" name="driver_name" value="{{ delivery.get('driver_name') or '' }}">
+    </div>
+    <div class="field" style="grid-column: span 2;">
+      <label>Notes</label>
+      <input type="text" name="notes" value="{{ delivery.get('notes') or '' }}">
+    </div>
+    <div class="field" style="align-self:end;">
+      <button class="btn" type="submit">Record Delivery</button>
+      <a class="btn btn-secondary" href="{{ url_for('delivery_list') }}">Cancel</a>
+    </div>
+  </form>
+</div>
+{% endblock %}
