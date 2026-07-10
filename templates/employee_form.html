@@ -130,6 +130,14 @@
           <label>Over-target Commission %</label>
           <input type="number" step="0.1" min="0" name="over_target_commission_percent" value="{{ employee.get('over_target_commission_percent') or '' }}" placeholder="e.g. 20">
         </div>
+        <div class="field">
+          <label>Required Daily Hours</label>
+          <input type="number" step="0.5" min="0" name="required_daily_hours" value="{{ employee.get('required_daily_hours') or '' }}" placeholder="e.g. 8">
+        </div>
+        <div class="field">
+          <label>Annual Leave Entitlement (days/year)</label>
+          <input type="number" step="1" min="0" name="annual_leave_entitlement" value="{{ employee.get('annual_leave_entitlement') or '' }}" placeholder="e.g. 14">
+        </div>
         <div class="field" style="display:flex; align-items:center; gap:8px; padding-top:22px;">
           <input type="checkbox" name="epf_etf_applicable" id="epf_etf_applicable" value="1" style="width:auto;" {{ 'checked' if employee.get('epf_etf_applicable') }}>
           <label for="epf_etf_applicable" style="margin:0;">EPF/ETF applicable (EPF 8% deducted from pay; employer pays 12% EPF + 3% ETF separately)</label>

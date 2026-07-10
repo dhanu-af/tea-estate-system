@@ -120,6 +120,8 @@ EMPLOYEE_FIELDS = [
     "bank_branch_code",
     "bank_account_type",
     "default_payment_method",
+    "required_daily_hours",
+    "annual_leave_entitlement",
 ]
 
 
@@ -478,6 +480,10 @@ def employee_new():
             float(data["over_target_commission_percent"]) if data["over_target_commission_percent"] else None
         )
         data["epf_etf_applicable"] = 1 if data["epf_etf_applicable"] else 0
+        data["required_daily_hours"] = float(data["required_daily_hours"]) if data["required_daily_hours"] else None
+        data["annual_leave_entitlement"] = (
+            float(data["annual_leave_entitlement"]) if data["annual_leave_entitlement"] else None
+        )
         if not data["full_name"]:
             flash("Full name is required.", "error")
             return render_template("employee_form.html", employee=data, mode="new")
@@ -523,6 +529,10 @@ def employee_edit(employee_id):
             float(data["over_target_commission_percent"]) if data["over_target_commission_percent"] else None
         )
         data["epf_etf_applicable"] = 1 if data["epf_etf_applicable"] else 0
+        data["required_daily_hours"] = float(data["required_daily_hours"]) if data["required_daily_hours"] else None
+        data["annual_leave_entitlement"] = (
+            float(data["annual_leave_entitlement"]) if data["annual_leave_entitlement"] else None
+        )
         if not data["full_name"]:
             flash("Full name is required.", "error")
             merged = dict(employee)
@@ -629,6 +639,88 @@ def checkin(employee_number):
 # ---------- Attendance ----------
 
 
+def _compute_attendance_summary(conn, date_from, date_to):
+    """Per-employee attendance & leave summary for a date range: days worked,
+    absent, paid leave, No-Pay (LOP) days, attendance %, hours, overtime, and
+    leave balance. Sick Leave is always paid; annual Leave is paid only up to
+    the employee's entitlement for the year — once that's used up, further
+    Leave days count as No-Pay (LOP), the same as Absent days."""
+    employees = conn.execute(
+        """SELECT id, employee_number, full_name, required_daily_hours, annual_leave_entitlement
+           FROM employees ORDER BY full_name"""
+    ).fetchall()
+
+    year_start = f"{date_from[:4]}-01-01"
+
+    summary = []
+    for e in employees:
+        records = conn.execute(
+            "SELECT date, status, total_work_hours FROM attendance WHERE employee_id = ? AND date BETWEEN ? AND ? ORDER BY date",
+            (e["id"], date_from, date_to),
+        ).fetchall()
+
+        days_worked = sum(1 for r in records if r["status"] in ("Present", "Half Day"))
+        days_absent = sum(1 for r in records if r["status"] == "Absent")
+        sick_leave_days = sum(1 for r in records if r["status"] == "Sick Leave")
+        total_recorded = len(records)
+        total_hours = round(sum(r["total_work_hours"] or 0 for r in records), 2)
+
+        entitlement = e["annual_leave_entitlement"]
+        leave_this_year = conn.execute(
+            "SELECT date FROM attendance WHERE employee_id = ? AND status = 'Leave' AND date BETWEEN ? AND ? ORDER BY date",
+            (e["id"], year_start, date_to),
+        ).fetchall()
+        paid_leave_in_period = 0
+        unpaid_leave_in_period = 0
+        running = 0
+        for r in leave_this_year:
+            is_paid = entitlement is not None and running < entitlement
+            if date_from <= r["date"] <= date_to:
+                if is_paid:
+                    paid_leave_in_period += 1
+                else:
+                    unpaid_leave_in_period += 1
+            running += 1
+        leave_balance = round(max(0, entitlement - running), 2) if entitlement is not None else None
+
+        paid_leave_days = paid_leave_in_period + sick_leave_days
+        no_pay_days = days_absent + unpaid_leave_in_period
+        attendance_pct = round(days_worked / total_recorded * 100, 1) if total_recorded else None
+
+        overtime_hours = None
+        incomplete_hours = False
+        if e["required_daily_hours"]:
+            overtime_hours = round(
+                sum(
+                    max(0, (r["total_work_hours"] or 0) - e["required_daily_hours"])
+                    for r in records
+                    if r["status"] in ("Present", "Half Day")
+                ),
+                2,
+            )
+            expected_hours = e["required_daily_hours"] * days_worked
+            incomplete_hours = days_worked > 0 and total_hours < expected_hours
+
+        summary.append(
+            {
+                "id": e["id"],
+                "employee_number": e["employee_number"],
+                "full_name": e["full_name"],
+                "days_worked": days_worked,
+                "days_absent": days_absent,
+                "paid_leave_days": paid_leave_days,
+                "no_pay_days": no_pay_days,
+                "attendance_pct": attendance_pct,
+                "total_hours": total_hours,
+                "overtime_hours": overtime_hours,
+                "leave_balance": leave_balance,
+                "incomplete_hours": incomplete_hours,
+                "required_daily_hours": e["required_daily_hours"],
+            }
+        )
+    return summary
+
+
 @app.route("/attendance")
 def attendance_list():
     date_filter = request.args.get("date", "").strip()
@@ -641,7 +733,34 @@ def attendance_list():
         params.append(date_filter)
     query += " ORDER BY a.date DESC, a.id DESC"
     rows = conn.execute(query, params).fetchall()
-    return render_template("attendance.html", records=rows, date_filter=date_filter)
+
+    cycle = _ensure_current_cycle(conn)
+    summary = _compute_attendance_summary(conn, cycle["cycle_start"], cycle["cycle_end"])
+
+    total_days_worked = sum(s["days_worked"] for s in summary)
+    total_days_absent = sum(s["days_absent"] for s in summary)
+    total_no_pay_days = sum(s["no_pay_days"] for s in summary)
+    total_paid_leave_days = sum(s["paid_leave_days"] for s in summary)
+    total_hours = round(sum(s["total_hours"] for s in summary), 2)
+    total_overtime_hours = round(sum(s["overtime_hours"] or 0 for s in summary), 2)
+    # no_pay_days already includes absences, so it isn't added again here (that would double-count them).
+    total_recorded = total_days_worked + total_paid_leave_days + total_no_pay_days
+    overall_attendance_pct = round(total_days_worked / total_recorded * 100, 1) if total_recorded else None
+
+    return render_template(
+        "attendance.html",
+        records=rows,
+        date_filter=date_filter,
+        cycle=cycle,
+        summary=summary,
+        total_days_worked=total_days_worked,
+        total_days_absent=total_days_absent,
+        total_no_pay_days=total_no_pay_days,
+        total_paid_leave_days=total_paid_leave_days,
+        total_hours=total_hours,
+        total_overtime_hours=total_overtime_hours,
+        overall_attendance_pct=overall_attendance_pct,
+    )
 
 
 @app.route("/attendance/new", methods=["GET", "POST"])
@@ -972,7 +1091,7 @@ def _compute_payroll_rows(date_from, date_to, include_advances=False):
     conn = get_connection()
     employees = conn.execute(
         """SELECT e.id, e.employee_number, e.full_name, e.rate_per_kg, e.hourly_rate,
-                  e.over_target_commission_percent, e.epf_etf_applicable,
+                  e.over_target_commission_percent, e.epf_etf_applicable, e.required_daily_hours,
                   (SELECT COUNT(*) FROM attendance a
                      WHERE a.employee_id = e.id AND a.date BETWEEN ? AND ? AND a.status = 'Present') AS present_days,
                   (SELECT COALESCE(SUM(a.total_work_hours), 0) FROM attendance a
@@ -981,6 +1100,8 @@ def _compute_payroll_rows(date_from, date_to, include_advances=False):
            ORDER BY e.full_name""",
         (date_from, date_to, date_from, date_to),
     ).fetchall()
+
+    attendance_by_employee = {s["id"]: s for s in _compute_attendance_summary(conn, date_from, date_to)}
 
     payroll_rows = []
     for e in employees:
@@ -1010,7 +1131,23 @@ def _compute_payroll_rows(date_from, date_to, include_advances=False):
         row["hourly_pay"] = (
             round(row["total_hours"] * row["hourly_rate"], 2) if row["hourly_rate"] else None
         )
+
+        attendance_info = attendance_by_employee.get(row["id"], {})
+        paid_leave_days = attendance_info.get("paid_leave_days", 0)
+        row["no_pay_days"] = attendance_info.get("no_pay_days", 0)
+        row["paid_leave_days"] = paid_leave_days
+        # Paid leave (annual Leave within entitlement, plus all Sick Leave) is compensated at
+        # the employee's day rate; No-Pay (LOP) days above genuinely earn nothing extra — they
+        # already contribute 0 hours to hourly_pay, so no separate deduction is needed for them.
+        row["leave_pay"] = (
+            round(paid_leave_days * row["required_daily_hours"] * row["hourly_rate"], 2)
+            if (row["hourly_rate"] and row["required_daily_hours"] and paid_leave_days)
+            else 0
+        )
+
         parts = [p for p in (row["harvest_payment"], row["hourly_pay"]) if p is not None]
+        if row["leave_pay"]:
+            parts.append(row["leave_pay"])
         row["total_pay"] = round(sum(parts), 2) if parts else None
 
         epf_etf = compute_epf_etf(row["total_pay"], row["epf_etf_applicable"])
@@ -1104,14 +1241,17 @@ def payroll_mark_paid():
             """INSERT INTO payroll_transactions
                (cycle_id, employee_id, employee_number, full_name, present_days, total_hours,
                 hourly_rate, hourly_pay, total_output, rate_per_kg, bonus_kg, bonus_pay, harvest_payment,
+                leave_pay, paid_leave_days, no_pay_days,
                 total_pay, advance_total, employee_epf, employer_epf, employer_etf, epf_etf_applicable,
                 net_pay, payment_method, payment_date, payment_status,
                 bank_name, bank_branch, bank_account_name, bank_account_number, bank_branch_code, bank_account_type)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 cycle["id"], row["id"], row["employee_number"], row["full_name"], row["present_days"],
                 row["total_hours"], row["hourly_rate"], row["hourly_pay"], row["total_output"], row["rate_per_kg"],
-                row["bonus_kg"], row["bonus_pay"], row["harvest_payment"], row["total_pay"], row["advance_total"],
+                row["bonus_kg"], row["bonus_pay"], row["harvest_payment"],
+                row["leave_pay"], row["paid_leave_days"], row["no_pay_days"],
+                row["total_pay"], row["advance_total"],
                 row["employee_epf"], row["employer_epf"], row["employer_etf"], row["epf_etf_applicable"],
                 row["net_pay"], employee["default_payment_method"] or "Cash", today_iso, "Paid",
                 employee["bank_name"], employee["bank_branch"], employee["bank_account_name"],
@@ -1201,7 +1341,8 @@ def payroll_export():
     writer.writerow(
         [
             "Employee Number", "Full Name", "Present Days", "Hours Worked", "Hourly Rate",
-            "Time-based Pay", "Harvest (kg)", "Rate/kg", "Bonus (kg)", "Harvest Pay", "Total Pay",
+            "Time-based Pay", "Harvest (kg)", "Rate/kg", "Bonus (kg)", "Harvest Pay",
+            "Paid Leave Days", "Leave Pay", "No-Pay (LOP) Days", "Total Pay",
             "Salary Advance", "Employee EPF (8%)", "Net Pay", "Employer EPF (12%)", "Employer ETF (3%)",
         ]
     )
@@ -1209,7 +1350,8 @@ def payroll_export():
         writer.writerow(
             [
                 r["employee_number"], r["full_name"], r["present_days"], r["total_hours"], r["hourly_rate"],
-                r["hourly_pay"], r["total_output"], r["rate_per_kg"], r["bonus_kg"], r["harvest_payment"], r["total_pay"],
+                r["hourly_pay"], r["total_output"], r["rate_per_kg"], r["bonus_kg"], r["harvest_payment"],
+                r["paid_leave_days"], r["leave_pay"], r["no_pay_days"], r["total_pay"],
                 r["advance_total"], r["employee_epf"], r["net_pay"], r["employer_epf"], r["employer_etf"],
             ]
         )
@@ -1287,6 +1429,14 @@ def _build_payslip_pdf(row, employee_extra, date_from, date_to, advances, paymen
                 row["bonus_pay"],
             ]
         )
+    if row.get("leave_pay"):
+        earnings_rows.append(
+            [
+                "Paid leave",
+                f"{row.get('paid_leave_days') or 0} day(s) @ day rate",
+                row["leave_pay"],
+            ]
+        )
     earnings_rows.append(["", "Total Pay", row["total_pay"] if row["total_pay"] is not None else "—"])
 
     earnings_table = Table(earnings_rows, colWidths=[45 * mm, 70 * mm, 45 * mm])
@@ -1340,6 +1490,16 @@ def _build_payslip_pdf(row, employee_extra, date_from, date_to, advances, paymen
             Paragraph(
                 f"Employer also contributes EPF 12% ({row['employer_epf']}) + ETF 3% ({row['employer_etf']}) "
                 "separately — not deducted from this payslip.",
+                sub_style,
+            )
+        )
+
+    if row.get("no_pay_days"):
+        elements.append(Spacer(1, 4 * mm))
+        elements.append(
+            Paragraph(
+                f"{row['no_pay_days']} No-Pay (LOP) day(s) this period (absence or leave beyond entitlement) "
+                "earned no pay and are not included above.",
                 sub_style,
             )
         )

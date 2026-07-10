@@ -148,6 +148,8 @@ CREATE TABLE IF NOT EXISTS employees (
     bank_branch_code TEXT,
     bank_account_type TEXT,
     default_payment_method TEXT,
+    required_daily_hours REAL,
+    annual_leave_entitlement REAL,
     created_at TEXT DEFAULT (now()::text),
     updated_at TEXT DEFAULT (now()::text)
 );
@@ -315,6 +317,9 @@ CREATE TABLE IF NOT EXISTS payroll_transactions (
     bonus_kg REAL,
     bonus_pay REAL,
     harvest_payment REAL,
+    leave_pay REAL,
+    paid_leave_days INTEGER,
+    no_pay_days INTEGER,
     total_pay REAL,
     advance_total REAL,
     employee_epf REAL,
@@ -365,7 +370,12 @@ def init_db():
             ALTER TABLE employees ADD COLUMN IF NOT EXISTS bank_branch_code TEXT;
             ALTER TABLE employees ADD COLUMN IF NOT EXISTS bank_account_type TEXT;
             ALTER TABLE employees ADD COLUMN IF NOT EXISTS default_payment_method TEXT;
+            ALTER TABLE employees ADD COLUMN IF NOT EXISTS required_daily_hours REAL;
+            ALTER TABLE employees ADD COLUMN IF NOT EXISTS annual_leave_entitlement REAL;
             ALTER TABLE payroll_transactions ADD COLUMN IF NOT EXISTS bonus_pay REAL;
+            ALTER TABLE payroll_transactions ADD COLUMN IF NOT EXISTS leave_pay REAL;
+            ALTER TABLE payroll_transactions ADD COLUMN IF NOT EXISTS paid_leave_days INTEGER;
+            ALTER TABLE payroll_transactions ADD COLUMN IF NOT EXISTS no_pay_days INTEGER;
             """
         )
         conn.commit()
@@ -403,6 +413,8 @@ def init_db():
             bank_branch_code TEXT,
             bank_account_type TEXT,
             default_payment_method TEXT,
+            required_daily_hours REAL,
+            annual_leave_entitlement REAL,
             created_at TEXT DEFAULT (datetime('now')),
             updated_at TEXT DEFAULT (datetime('now'))
         );
@@ -567,6 +579,9 @@ def init_db():
             bonus_kg REAL,
             bonus_pay REAL,
             harvest_payment REAL,
+            leave_pay REAL,
+            paid_leave_days INTEGER,
+            no_pay_days INTEGER,
             total_pay REAL,
             advance_total REAL,
             employee_epf REAL,
@@ -644,6 +659,12 @@ def init_db():
     existing_txn_columns = {row["name"] for row in conn.execute("PRAGMA table_info(payroll_transactions)")}
     if "bonus_pay" not in existing_txn_columns:
         conn.execute("ALTER TABLE payroll_transactions ADD COLUMN bonus_pay REAL")
+    if "leave_pay" not in existing_txn_columns:
+        conn.execute("ALTER TABLE payroll_transactions ADD COLUMN leave_pay REAL")
+    if "paid_leave_days" not in existing_txn_columns:
+        conn.execute("ALTER TABLE payroll_transactions ADD COLUMN paid_leave_days INTEGER")
+    if "no_pay_days" not in existing_txn_columns:
+        conn.execute("ALTER TABLE payroll_transactions ADD COLUMN no_pay_days INTEGER")
 
     for col, ddl in (
         ("bank_name", "ALTER TABLE employees ADD COLUMN bank_name TEXT"),
@@ -653,6 +674,8 @@ def init_db():
         ("bank_branch_code", "ALTER TABLE employees ADD COLUMN bank_branch_code TEXT"),
         ("bank_account_type", "ALTER TABLE employees ADD COLUMN bank_account_type TEXT"),
         ("default_payment_method", "ALTER TABLE employees ADD COLUMN default_payment_method TEXT"),
+        ("required_daily_hours", "ALTER TABLE employees ADD COLUMN required_daily_hours REAL"),
+        ("annual_leave_entitlement", "ALTER TABLE employees ADD COLUMN annual_leave_entitlement REAL"),
     ):
         if col not in existing_employee_columns:
             conn.execute(ddl)

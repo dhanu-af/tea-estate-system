@@ -9,6 +9,76 @@
   <a class="btn" href="{{ url_for('attendance_new') }}">+ Log Attendance</a>
 </div>
 
+<div class="panel">
+  <h2 style="margin:0 0 4px;">Attendance Summary</h2>
+  <p class="subtitle" style="margin:0 0 14px;">Current pay cycle: {{ cycle['cycle_start']|lk_date }} &ndash; {{ cycle['cycle_end']|lk_date }}</p>
+  <div class="cards" style="margin-bottom:0;">
+    <div class="card">
+      <div class="stat">{{ total_days_worked }}</div>
+      <div class="label">Total Days Worked</div>
+    </div>
+    <div class="card">
+      <div class="stat">{{ total_days_absent }}</div>
+      <div class="label">Days Absent</div>
+    </div>
+    <div class="card">
+      <div class="stat" style="color: {{ 'var(--danger)' if total_no_pay_days else 'inherit' }};">{{ total_no_pay_days }}</div>
+      <div class="label">No Pay (LOP) Days</div>
+    </div>
+    <div class="card">
+      <div class="stat">{{ total_paid_leave_days }}</div>
+      <div class="label">Paid Leave Days</div>
+    </div>
+    <div class="card">
+      <div class="stat">{{ overall_attendance_pct if overall_attendance_pct is not none else '—' }}{% if overall_attendance_pct is not none %}%{% endif %}</div>
+      <div class="label">Attendance Percentage</div>
+    </div>
+    <div class="card">
+      <div class="stat">{{ total_hours }}</div>
+      <div class="label">Total Working Hours</div>
+    </div>
+    <div class="card">
+      <div class="stat">{{ total_overtime_hours }}</div>
+      <div class="label">Overtime Hours</div>
+    </div>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>Employee Attendance &amp; Leave Balance</h2>
+  <p class="subtitle" style="margin-top:-6px;">For the current pay cycle. Rows in red haven't completed their required daily/weekly hours (set "Required Daily Hours" on the employee profile to enable this check).</p>
+  {% if summary %}
+  <table style="margin-top:14px;">
+    <thead>
+      <tr>
+        <th>Employee</th><th>Days Worked</th><th>Absent</th><th>Paid Leave</th><th>No Pay (LOP)</th>
+        <th>Attendance %</th><th>Hours</th><th>Overtime</th><th>Leave Balance</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for s in summary %}
+      <tr style="{{ 'background: rgba(255,107,107,0.08);' if s['incomplete_hours'] }}">
+        <td>
+          <a href="{{ url_for('employee_edit', employee_id=s['id']) }}">{{ s['full_name'] }}</a> <small>({{ s['employee_number'] }})</small>
+          {% if s['incomplete_hours'] %}<span class="badge badge-absent" title="Hasn't completed required daily/weekly hours">Under hours</span>{% endif %}
+        </td>
+        <td>{{ s['days_worked'] }}</td>
+        <td>{{ s['days_absent'] }}</td>
+        <td>{{ s['paid_leave_days'] }}</td>
+        <td style="color: {{ 'var(--danger)' if s['no_pay_days'] else 'inherit' }};">{{ s['no_pay_days'] }}</td>
+        <td>{{ s['attendance_pct'] if s['attendance_pct'] is not none else '—' }}{% if s['attendance_pct'] is not none %}%{% endif %}</td>
+        <td>{{ s['total_hours'] }}</td>
+        <td>{{ s['overtime_hours'] if s['overtime_hours'] is not none else '—' }}</td>
+        <td>{{ s['leave_balance'] if s['leave_balance'] is not none else '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty-state">No employees registered yet.</div>
+  {% endif %}
+</div>
+
 <form class="search-bar" method="get">
   <input type="date" name="date" value="{{ date_filter }}">
   <button class="btn btn-secondary" type="submit">Filter</button>
