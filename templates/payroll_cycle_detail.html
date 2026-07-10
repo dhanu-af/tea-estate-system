@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% block title %}Payroll Cycle · DKNS Tea Lands{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Payroll Cycle: {{ cycle['cycle_start']|lk_date }} &ndash; {{ cycle['cycle_end']|lk_date }}</h1>
+    <p class="subtitle">Due {{ cycle['due_date']|lk_date }} &middot; <span class="badge badge-completed">{{ cycle['status'] }}</span> &middot; Locked and read-only — figures are frozen as of when this cycle was marked paid.</p>
+  </div>
+  <div style="display:flex; gap:8px;">
+    <a class="btn btn-secondary" href="{{ url_for('payroll_history') }}">Back to History</a>
+    <a class="btn btn-secondary" href="{{ url_for('payroll_cycle_export', cycle_id=cycle['id']) }}">Export CSV</a>
+    <a class="btn" href="{{ url_for('payroll_cycle_pdf', cycle_id=cycle['id']) }}" target="_blank">Print Report PDF</a>
+  </div>
+</div>
+
+<div class="cards">
+  <div class="card">
+    <div class="stat">{{ transactions|length }}</div>
+    <div class="label">Employees paid</div>
+  </div>
+  <div class="card">
+    <div class="stat">{{ total_gross_pay }}</div>
+    <div class="label">Total gross pay</div>
+  </div>
+  <div class="card">
+    <div class="stat">{{ total_net_pay }}</div>
+    <div class="label">Total net pay</div>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>Payroll figures (frozen)</h2>
+  {% if transactions %}
+  <table>
+    <thead>
+      <tr>
+        <th>Employee</th><th>Hours</th><th>Harvest (kg)</th><th>Harvest Pay</th><th>Time Pay</th>
+        <th>Total Pay</th><th>Advance</th><th>EPF (8%)</th><th>Net Pay</th><th>Employer EPF+ETF</th><th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for t in transactions %}
+      <tr>
+        <td>{{ t['full_name'] }} <small>({{ t['employee_number'] }})</small></td>
+        <td>{{ t['total_hours'] }}</td>
+        <td>{{ t['total_output'] }}</td>
+        <td>{{ t['harvest_payment'] if t['harvest_payment'] is not none else '—' }}</td>
+        <td>{{ t['hourly_pay'] if t['hourly_pay'] is not none else '—' }}</td>
+        <td><strong>{{ t['total_pay'] }}</strong></td>
+        <td>{{ t['advance_total'] or '—' }}</td>
+        <td>{{ t['employee_epf'] or '—' }}</td>
+        <td>{{ t['net_pay'] }}</td>
+        <td>{{ ((t['employer_epf'] or 0) + (t['employer_etf'] or 0))|round(2) if t['epf_etf_applicable'] else '—' }}</td>
+        <td>
+          {% if t['employee_id'] %}
+          <a class="btn btn-secondary btn-sm" href="{{ url_for('payroll_history_payslip', cycle_id=cycle['id'], employee_id=t['employee_id']) }}" target="_blank">Payslip</a>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty-state">No employees had a rate configured when this cycle was paid.</div>
+  {% endif %}
+</div>
+
+<div class="panel">
+  <h2>Payment tracking</h2>
+  <p class="subtitle" style="margin-top:-6px;">Bank details and payment method, date, status, and reference/transaction ID for each employee — editable if a payment needs correcting.</p>
+  {% if transactions %}
+  <table>
+    <thead>
+      <tr>
+        <th>Employee</th><th>Bank</th><th>Account</th><th>Method</th><th>Date</th><th>Status</th><th>Reference</th><th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for t in transactions %}
+      <tr>
+        <td>{{ t['full_name'] }}</td>
+        <td>{{ t['bank_name'] or '—' }}{% if t['bank_branch'] %} ({{ t['bank_branch'] }}){% endif %}</td>
+        <td>{{ t['bank_account_number'] or '—' }}{% if t['bank_account_type'] %} &middot; {{ t['bank_account_type'] }}{% endif %}</td>
+        <td colspan="4">
+          <form method="post" action="{{ url_for('payroll_transaction_update', cycle_id=cycle['id'], transaction_id=t['id']) }}" style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+            <select name="payment_method" style="padding:6px 8px; border:1px solid var(--border-strong); border-radius:8px; background:var(--bg-elevated); color:var(--text);">
+              {% for m in payment_methods %}
+              <option value="{{ m }}" {{ 'selected' if t['payment_method'] == m }}>{{ m }}</option>
+              {% endfor %}
+            </select>
+            <input type="date" name="payment_date" value="{{ t['payment_date'] or '' }}" style="padding:6px 8px; border:1px solid var(--border-strong); border-radius:8px; background:var(--bg-elevated); color:var(--text);">
+            <select name="payment_status" style="padding:6px 8px; border:1px solid var(--border-strong); border-radius:8px; background:var(--bg-elevated); color:var(--text);">
+              {% for s in payroll_transaction_statuses %}
+              <option value="{{ s }}" {{ 'selected' if t['payment_status'] == s }}>{{ s }}</option>
+              {% endfor %}
+            </select>
+            <input type="text" name="payment_reference" value="{{ t['payment_reference'] or '' }}" placeholder="Reference / Transaction ID" style="padding:6px 8px; border:1px solid var(--border-strong); border-radius:8px; background:var(--bg-elevated); color:var(--text);">
+            <button class="btn btn-secondary btn-sm" type="submit">Update</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty-state">No payment records for this cycle.</div>
+  {% endif %}
+</div>
+{% endblock %}

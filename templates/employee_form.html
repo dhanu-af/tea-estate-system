@@ -137,6 +137,51 @@
       </div>
     </div>
 
+    <div class="field-section">
+      <h3>Banking &amp; Payment Details</h3>
+      <p class="subtitle" style="margin:-4px 0 12px;">Used to pay this employee's weekly wages and shown on their payslips.</p>
+      <div class="form-grid">
+        <div class="field">
+          <label>Default Payment Method</label>
+          <select name="default_payment_method">
+            <option value="">Select</option>
+            {% for m in payment_methods %}
+            <option value="{{ m }}" {{ 'selected' if employee.get('default_payment_method') == m }}>{{ m }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="field">
+          <label>Bank Name</label>
+          <input type="text" name="bank_name" value="{{ employee.get('bank_name') or '' }}" placeholder="e.g. Bank of Ceylon">
+        </div>
+        <div class="field">
+          <label>Branch</label>
+          <input type="text" name="bank_branch" value="{{ employee.get('bank_branch') or '' }}" placeholder="e.g. Kandy">
+        </div>
+        <div class="field">
+          <label>Branch / BSB Code</label>
+          <input type="text" name="bank_branch_code" value="{{ employee.get('bank_branch_code') or '' }}">
+        </div>
+        <div class="field">
+          <label>Account Name</label>
+          <input type="text" name="bank_account_name" value="{{ employee.get('bank_account_name') or '' }}" placeholder="Name on the account">
+        </div>
+        <div class="field">
+          <label>Account Number</label>
+          <input type="text" name="bank_account_number" value="{{ employee.get('bank_account_number') or '' }}">
+        </div>
+        <div class="field">
+          <label>Account Type</label>
+          <select name="bank_account_type">
+            <option value="">Select</option>
+            {% for t in bank_account_types %}
+            <option value="{{ t }}" {{ 'selected' if employee.get('bank_account_type') == t }}>{{ t }}</option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+    </div>
+
     <div class="actions-row">
       <button class="btn" type="submit">{{ 'Save Changes' if mode == 'edit' else 'Register Employee' }}</button>
       <a class="btn btn-secondary" href="{{ url_for('employee_list') }}">Cancel</a>

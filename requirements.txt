@@ -3,3 +3,4 @@ qrcode==8.2
 pillow==12.3.0
 reportlab==5.0.0
 psycopg2-binary==2.9.10
+tzdata==2025.2

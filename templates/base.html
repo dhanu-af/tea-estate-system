@@ -21,7 +21,7 @@
         <a href="{{ url_for('attendance_list') }}" class="{{ 'active' if request.endpoint and request.endpoint.startswith('attendance') }}"><span class="nav-icon">🕒</span>Attendance</a>
         <a href="{{ url_for('work_assignment_list') }}" class="{{ 'active' if request.endpoint and request.endpoint.startswith('work_assignment') }}"><span class="nav-icon">🌿</span>Work &amp; Harvest</a>
         {% if session.get('role') == 'Admin' %}
-        <a href="{{ url_for('payroll') }}" class="{{ 'active' if request.endpoint == 'payroll' }}"><span class="nav-icon">💰</span>Payroll</a>
+        <a href="{{ url_for('payroll') }}" class="{{ 'active' if request.endpoint and request.endpoint.startswith('payroll') }}"><span class="nav-icon">💰</span>Payroll</a>
         <a href="{{ url_for('income') }}" class="{{ 'active' if request.endpoint and request.endpoint.startswith('income') }}"><span class="nav-icon">📈</span>Income &amp; Profit</a>
         <a href="{{ url_for('finance_dashboard') }}" class="{{ 'active' if request.endpoint and (request.endpoint.startswith('finance') or request.endpoint.startswith('factory') or request.endpoint.startswith('delivery') or request.endpoint.startswith('invoice')) }}"><span class="nav-icon">🏭</span>Finance &amp; Factory</a>
         <a href="{{ url_for('user_list') }}" class="{{ 'active' if request.endpoint and request.endpoint.startswith('user') }}"><span class="nav-icon">🔐</span>User Management</a>

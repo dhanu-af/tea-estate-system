@@ -15,9 +15,12 @@ VERIFICATION_METHODS = ["QR code", "Fingerprint", "Face recognition", "Manual en
 TASK_TYPES = ["Plucking", "Fertilizer", "Pruning", "Weeding", "Spraying"]
 WORK_STATUSES = ["Pending", "In Progress", "Completed"]
 EXPENSE_CATEGORIES = ["Fertilizer", "Transport", "Fuel", "Food", "Others"]
-PAYMENT_METHODS = ["Cash", "Cheque", "Bank Transfer"]
+PAYMENT_METHODS = ["Cash", "Bank Transfer", "Cheque", "Other"]
 INVOICE_STATUSES = ["Unpaid", "Partially Paid", "Paid"]
 USER_ROLES = ["Admin", "Dhanu Operations"]
+BANK_ACCOUNT_TYPES = ["Savings", "Current"]
+PAYROLL_CYCLE_STATUSES = ["Unpaid", "Paid"]
+PAYROLL_TRANSACTION_STATUSES = ["Pending", "Paid", "Failed"]
 
 # On Vercel there's no writable, persistent local disk for a SQLite file — every
 # serverless invocation gets its own ephemeral filesystem. So in production we
@@ -138,6 +141,13 @@ CREATE TABLE IF NOT EXISTS employees (
     hourly_rate REAL,
     over_target_commission_percent REAL,
     epf_etf_applicable INTEGER NOT NULL DEFAULT 0,
+    bank_name TEXT,
+    bank_branch TEXT,
+    bank_account_name TEXT,
+    bank_account_number TEXT,
+    bank_branch_code TEXT,
+    bank_account_type TEXT,
+    default_payment_method TEXT,
     created_at TEXT DEFAULT (now()::text),
     updated_at TEXT DEFAULT (now()::text)
 );
@@ -196,6 +206,7 @@ CREATE TABLE IF NOT EXISTS daily_prices (
     id SERIAL PRIMARY KEY,
     date TEXT UNIQUE NOT NULL,
     price_per_kg REAL NOT NULL,
+    created_by INTEGER,
     updated_at TEXT DEFAULT (now()::text)
 );
 
@@ -205,6 +216,8 @@ CREATE TABLE IF NOT EXISTS expenses (
     category TEXT NOT NULL,
     amount REAL NOT NULL,
     note TEXT,
+    payment_method TEXT,
+    created_by INTEGER,
     created_at TEXT DEFAULT (now()::text)
 );
 
@@ -214,6 +227,8 @@ CREATE TABLE IF NOT EXISTS salary_advances (
     date TEXT NOT NULL,
     amount REAL NOT NULL,
     note TEXT,
+    payment_method TEXT,
+    created_by INTEGER,
     created_at TEXT DEFAULT (now()::text),
     FOREIGN KEY (employee_id) REFERENCES employees (id) ON DELETE CASCADE
 );
@@ -228,21 +243,9 @@ CREATE TABLE IF NOT EXISTS factories (
     created_at TEXT DEFAULT (now()::text)
 );
 
-CREATE TABLE IF NOT EXISTS factory_deliveries (
-    id SERIAL PRIMARY KEY,
-    delivery_date TEXT NOT NULL,
-    factory_id INTEGER NOT NULL,
-    estate_weight REAL,
-    factory_weight REAL NOT NULL,
-    vehicle_number TEXT,
-    driver_name TEXT,
-    notes TEXT,
-    invoice_id INTEGER,
-    created_at TEXT DEFAULT (now()::text),
-    FOREIGN KEY (factory_id) REFERENCES factories (id),
-    FOREIGN KEY (invoice_id) REFERENCES invoices (id) ON DELETE SET NULL
-);
-
+-- invoices must be created before factory_deliveries: Postgres validates a
+-- foreign key's target table exists immediately (SQLite doesn't check until
+-- the FK is actually enforced), so the dependency order matters here.
 CREATE TABLE IF NOT EXISTS invoices (
     id SERIAL PRIMARY KEY,
     invoice_number TEXT UNIQUE NOT NULL,
@@ -253,8 +256,25 @@ CREATE TABLE IF NOT EXISTS invoices (
     total_amount REAL NOT NULL,
     status TEXT NOT NULL DEFAULT 'Unpaid',
     notes TEXT,
+    created_by INTEGER,
     created_at TEXT DEFAULT (now()::text),
     FOREIGN KEY (factory_id) REFERENCES factories (id)
+);
+
+CREATE TABLE IF NOT EXISTS factory_deliveries (
+    id SERIAL PRIMARY KEY,
+    delivery_date TEXT NOT NULL,
+    factory_id INTEGER NOT NULL,
+    estate_weight REAL,
+    factory_weight REAL NOT NULL,
+    vehicle_number TEXT,
+    driver_name TEXT,
+    notes TEXT,
+    invoice_id INTEGER,
+    created_by INTEGER,
+    created_at TEXT DEFAULT (now()::text),
+    FOREIGN KEY (factory_id) REFERENCES factories (id),
+    FOREIGN KEY (invoice_id) REFERENCES invoices (id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS invoice_payments (
@@ -265,72 +285,58 @@ CREATE TABLE IF NOT EXISTS invoice_payments (
     method TEXT NOT NULL,
     reference_number TEXT,
     note TEXT,
+    created_by INTEGER,
     created_at TEXT DEFAULT (now()::text),
     FOREIGN KEY (invoice_id) REFERENCES invoices (id) ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS payroll_cycles (
+    id SERIAL PRIMARY KEY,
+    cycle_start TEXT UNIQUE NOT NULL,
+    cycle_end TEXT NOT NULL,
+    due_date TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'Unpaid',
+    paid_at TEXT,
+    created_at TEXT DEFAULT (now()::text)
+);
+
+CREATE TABLE IF NOT EXISTS payroll_transactions (
+    id SERIAL PRIMARY KEY,
+    cycle_id INTEGER NOT NULL,
+    employee_id INTEGER,
+    employee_number TEXT NOT NULL,
+    full_name TEXT NOT NULL,
+    present_days INTEGER,
+    total_hours REAL,
+    hourly_rate REAL,
+    hourly_pay REAL,
+    total_output REAL,
+    rate_per_kg REAL,
+    bonus_kg REAL,
+    bonus_pay REAL,
+    harvest_payment REAL,
+    total_pay REAL,
+    advance_total REAL,
+    employee_epf REAL,
+    employer_epf REAL,
+    employer_etf REAL,
+    epf_etf_applicable INTEGER NOT NULL DEFAULT 0,
+    net_pay REAL,
+    payment_method TEXT,
+    payment_date TEXT,
+    payment_reference TEXT,
+    payment_status TEXT NOT NULL DEFAULT 'Pending',
+    bank_name TEXT,
+    bank_branch TEXT,
+    bank_account_name TEXT,
+    bank_account_number TEXT,
+    bank_branch_code TEXT,
+    bank_account_type TEXT,
+    created_at TEXT DEFAULT (now()::text),
+    FOREIGN KEY (cycle_id) REFERENCES payroll_cycles (id) ON DELETE CASCADE,
+    FOREIGN KEY (employee_id) REFERENCES employees (id) ON DELETE SET NULL
+);
 """
-
-# factory_deliveries.invoice_id references invoices, which is defined after it —
-# fine in SQLite (FKs aren't checked at CREATE TABLE time), but Postgres validates
-# the referenced table exists immediately, so invoices must be created first there.
-_POSTGRES_SCHEMA = _POSTGRES_SCHEMA.replace(
-    """CREATE TABLE IF NOT EXISTS factory_deliveries (
-    id SERIAL PRIMARY KEY,
-    delivery_date TEXT NOT NULL,
-    factory_id INTEGER NOT NULL,
-    estate_weight REAL,
-    factory_weight REAL NOT NULL,
-    vehicle_number TEXT,
-    driver_name TEXT,
-    notes TEXT,
-    invoice_id INTEGER,
-    created_at TEXT DEFAULT (now()::text),
-    FOREIGN KEY (factory_id) REFERENCES factories (id),
-    FOREIGN KEY (invoice_id) REFERENCES invoices (id) ON DELETE SET NULL
-);
-
-CREATE TABLE IF NOT EXISTS invoices (
-    id SERIAL PRIMARY KEY,
-    invoice_number TEXT UNIQUE NOT NULL,
-    factory_id INTEGER NOT NULL,
-    invoice_date TEXT NOT NULL,
-    price_per_kg REAL NOT NULL,
-    total_weight REAL NOT NULL,
-    total_amount REAL NOT NULL,
-    status TEXT NOT NULL DEFAULT 'Unpaid',
-    notes TEXT,
-    created_at TEXT DEFAULT (now()::text),
-    FOREIGN KEY (factory_id) REFERENCES factories (id)
-);""",
-    """CREATE TABLE IF NOT EXISTS invoices (
-    id SERIAL PRIMARY KEY,
-    invoice_number TEXT UNIQUE NOT NULL,
-    factory_id INTEGER NOT NULL,
-    invoice_date TEXT NOT NULL,
-    price_per_kg REAL NOT NULL,
-    total_weight REAL NOT NULL,
-    total_amount REAL NOT NULL,
-    status TEXT NOT NULL DEFAULT 'Unpaid',
-    notes TEXT,
-    created_at TEXT DEFAULT (now()::text),
-    FOREIGN KEY (factory_id) REFERENCES factories (id)
-);
-
-CREATE TABLE IF NOT EXISTS factory_deliveries (
-    id SERIAL PRIMARY KEY,
-    delivery_date TEXT NOT NULL,
-    factory_id INTEGER NOT NULL,
-    estate_weight REAL,
-    factory_weight REAL NOT NULL,
-    vehicle_number TEXT,
-    driver_name TEXT,
-    notes TEXT,
-    invoice_id INTEGER,
-    created_at TEXT DEFAULT (now()::text),
-    FOREIGN KEY (factory_id) REFERENCES factories (id),
-    FOREIGN KEY (invoice_id) REFERENCES invoices (id) ON DELETE SET NULL
-);""",
-)
 
 
 def init_db():
@@ -344,6 +350,22 @@ def init_db():
             """
             ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'Admin';
             ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active INTEGER NOT NULL DEFAULT 1;
+            ALTER TABLE daily_prices ADD COLUMN IF NOT EXISTS created_by INTEGER;
+            ALTER TABLE expenses ADD COLUMN IF NOT EXISTS payment_method TEXT;
+            ALTER TABLE expenses ADD COLUMN IF NOT EXISTS created_by INTEGER;
+            ALTER TABLE salary_advances ADD COLUMN IF NOT EXISTS payment_method TEXT;
+            ALTER TABLE salary_advances ADD COLUMN IF NOT EXISTS created_by INTEGER;
+            ALTER TABLE invoices ADD COLUMN IF NOT EXISTS created_by INTEGER;
+            ALTER TABLE factory_deliveries ADD COLUMN IF NOT EXISTS created_by INTEGER;
+            ALTER TABLE invoice_payments ADD COLUMN IF NOT EXISTS created_by INTEGER;
+            ALTER TABLE employees ADD COLUMN IF NOT EXISTS bank_name TEXT;
+            ALTER TABLE employees ADD COLUMN IF NOT EXISTS bank_branch TEXT;
+            ALTER TABLE employees ADD COLUMN IF NOT EXISTS bank_account_name TEXT;
+            ALTER TABLE employees ADD COLUMN IF NOT EXISTS bank_account_number TEXT;
+            ALTER TABLE employees ADD COLUMN IF NOT EXISTS bank_branch_code TEXT;
+            ALTER TABLE employees ADD COLUMN IF NOT EXISTS bank_account_type TEXT;
+            ALTER TABLE employees ADD COLUMN IF NOT EXISTS default_payment_method TEXT;
+            ALTER TABLE payroll_transactions ADD COLUMN IF NOT EXISTS bonus_pay REAL;
             """
         )
         conn.commit()
@@ -374,6 +396,13 @@ def init_db():
             hourly_rate REAL,
             over_target_commission_percent REAL,
             epf_etf_applicable INTEGER NOT NULL DEFAULT 0,
+            bank_name TEXT,
+            bank_branch TEXT,
+            bank_account_name TEXT,
+            bank_account_number TEXT,
+            bank_branch_code TEXT,
+            bank_account_type TEXT,
+            default_payment_method TEXT,
             created_at TEXT DEFAULT (datetime('now')),
             updated_at TEXT DEFAULT (datetime('now'))
         );
@@ -432,6 +461,7 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             date TEXT UNIQUE NOT NULL,
             price_per_kg REAL NOT NULL,
+            created_by INTEGER,
             updated_at TEXT DEFAULT (datetime('now'))
         );
 
@@ -441,6 +471,8 @@ def init_db():
             category TEXT NOT NULL,
             amount REAL NOT NULL,
             note TEXT,
+            payment_method TEXT,
+            created_by INTEGER,
             created_at TEXT DEFAULT (datetime('now'))
         );
 
@@ -450,6 +482,8 @@ def init_db():
             date TEXT NOT NULL,
             amount REAL NOT NULL,
             note TEXT,
+            payment_method TEXT,
+            created_by INTEGER,
             created_at TEXT DEFAULT (datetime('now')),
             FOREIGN KEY (employee_id) REFERENCES employees (id) ON DELETE CASCADE
         );
@@ -474,6 +508,7 @@ def init_db():
             driver_name TEXT,
             notes TEXT,
             invoice_id INTEGER,
+            created_by INTEGER,
             created_at TEXT DEFAULT (datetime('now')),
             FOREIGN KEY (factory_id) REFERENCES factories (id),
             FOREIGN KEY (invoice_id) REFERENCES invoices (id) ON DELETE SET NULL
@@ -489,6 +524,7 @@ def init_db():
             total_amount REAL NOT NULL,
             status TEXT NOT NULL DEFAULT 'Unpaid',
             notes TEXT,
+            created_by INTEGER,
             created_at TEXT DEFAULT (datetime('now')),
             FOREIGN KEY (factory_id) REFERENCES factories (id)
         );
@@ -501,8 +537,56 @@ def init_db():
             method TEXT NOT NULL,
             reference_number TEXT,
             note TEXT,
+            created_by INTEGER,
             created_at TEXT DEFAULT (datetime('now')),
             FOREIGN KEY (invoice_id) REFERENCES invoices (id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS payroll_cycles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            cycle_start TEXT UNIQUE NOT NULL,
+            cycle_end TEXT NOT NULL,
+            due_date TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'Unpaid',
+            paid_at TEXT,
+            created_at TEXT DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS payroll_transactions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            cycle_id INTEGER NOT NULL,
+            employee_id INTEGER,
+            employee_number TEXT NOT NULL,
+            full_name TEXT NOT NULL,
+            present_days INTEGER,
+            total_hours REAL,
+            hourly_rate REAL,
+            hourly_pay REAL,
+            total_output REAL,
+            rate_per_kg REAL,
+            bonus_kg REAL,
+            bonus_pay REAL,
+            harvest_payment REAL,
+            total_pay REAL,
+            advance_total REAL,
+            employee_epf REAL,
+            employer_epf REAL,
+            employer_etf REAL,
+            epf_etf_applicable INTEGER NOT NULL DEFAULT 0,
+            net_pay REAL,
+            payment_method TEXT,
+            payment_date TEXT,
+            payment_reference TEXT,
+            payment_status TEXT NOT NULL DEFAULT 'Pending',
+            bank_name TEXT,
+            bank_branch TEXT,
+            bank_account_name TEXT,
+            bank_account_number TEXT,
+            bank_branch_code TEXT,
+            bank_account_type TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY (cycle_id) REFERENCES payroll_cycles (id) ON DELETE CASCADE,
+            FOREIGN KEY (employee_id) REFERENCES employees (id) ON DELETE SET NULL
         );
         """
     )
@@ -528,6 +612,50 @@ def init_db():
         conn.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'Admin'")
     if "is_active" not in existing_user_columns:
         conn.execute("ALTER TABLE users ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1")
+
+    existing_daily_price_columns = {row["name"] for row in conn.execute("PRAGMA table_info(daily_prices)")}
+    if "created_by" not in existing_daily_price_columns:
+        conn.execute("ALTER TABLE daily_prices ADD COLUMN created_by INTEGER")
+
+    existing_expense_columns = {row["name"] for row in conn.execute("PRAGMA table_info(expenses)")}
+    if "payment_method" not in existing_expense_columns:
+        conn.execute("ALTER TABLE expenses ADD COLUMN payment_method TEXT")
+    if "created_by" not in existing_expense_columns:
+        conn.execute("ALTER TABLE expenses ADD COLUMN created_by INTEGER")
+
+    existing_advance_columns = {row["name"] for row in conn.execute("PRAGMA table_info(salary_advances)")}
+    if "payment_method" not in existing_advance_columns:
+        conn.execute("ALTER TABLE salary_advances ADD COLUMN payment_method TEXT")
+    if "created_by" not in existing_advance_columns:
+        conn.execute("ALTER TABLE salary_advances ADD COLUMN created_by INTEGER")
+
+    existing_invoice_columns = {row["name"] for row in conn.execute("PRAGMA table_info(invoices)")}
+    if "created_by" not in existing_invoice_columns:
+        conn.execute("ALTER TABLE invoices ADD COLUMN created_by INTEGER")
+
+    existing_delivery_columns = {row["name"] for row in conn.execute("PRAGMA table_info(factory_deliveries)")}
+    if "created_by" not in existing_delivery_columns:
+        conn.execute("ALTER TABLE factory_deliveries ADD COLUMN created_by INTEGER")
+
+    existing_payment_columns = {row["name"] for row in conn.execute("PRAGMA table_info(invoice_payments)")}
+    if "created_by" not in existing_payment_columns:
+        conn.execute("ALTER TABLE invoice_payments ADD COLUMN created_by INTEGER")
+
+    existing_txn_columns = {row["name"] for row in conn.execute("PRAGMA table_info(payroll_transactions)")}
+    if "bonus_pay" not in existing_txn_columns:
+        conn.execute("ALTER TABLE payroll_transactions ADD COLUMN bonus_pay REAL")
+
+    for col, ddl in (
+        ("bank_name", "ALTER TABLE employees ADD COLUMN bank_name TEXT"),
+        ("bank_branch", "ALTER TABLE employees ADD COLUMN bank_branch TEXT"),
+        ("bank_account_name", "ALTER TABLE employees ADD COLUMN bank_account_name TEXT"),
+        ("bank_account_number", "ALTER TABLE employees ADD COLUMN bank_account_number TEXT"),
+        ("bank_branch_code", "ALTER TABLE employees ADD COLUMN bank_branch_code TEXT"),
+        ("bank_account_type", "ALTER TABLE employees ADD COLUMN bank_account_type TEXT"),
+        ("default_payment_method", "ALTER TABLE employees ADD COLUMN default_payment_method TEXT"),
+    ):
+        if col not in existing_employee_columns:
+            conn.execute(ddl)
 
     conn.commit()
     conn.close()

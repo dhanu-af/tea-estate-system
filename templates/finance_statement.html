@@ -1,0 +1,174 @@
+{% extends "base.html" %}
+{% block title %}Finance & Factory Statement · DKNS Tea Lands{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Finance &amp; Factory Statement</h1>
+    <p class="subtitle">A chronological ledger of every income, expense, payroll cost, salary advance, delivery, invoice, and factory payment — like a bank statement for the estate.</p>
+  </div>
+  <div style="display:flex; gap:8px;">
+    <a class="btn btn-secondary" href="{{ url_for('finance_statement_csv', **request.args) }}">Export CSV</a>
+    <a class="btn" href="{{ url_for('finance_statement_pdf', **dict(request.args, orientation='landscape')) }}" target="_blank">Print PDF (Landscape)</a>
+    <a class="btn btn-secondary" href="{{ url_for('finance_statement_pdf', **dict(request.args, orientation='portrait')) }}" target="_blank">Portrait</a>
+  </div>
+</div>
+
+<div class="search-bar" style="flex-wrap: wrap;">
+  <a class="btn {{ 'btn-secondary' if view != 'daily' }}" href="{{ url_for('finance_statement', view='daily', date=selected_date) }}">Daily</a>
+  <a class="btn {{ 'btn-secondary' if view != 'weekly' }}" href="{{ url_for('finance_statement', view='weekly', date=selected_date) }}">Weekly</a>
+  <a class="btn {{ 'btn-secondary' if view != 'monthly' }}" href="{{ url_for('finance_statement', view='monthly', date=selected_date) }}">Monthly</a>
+  <a class="btn {{ 'btn-secondary' if view != 'custom' }}" href="{{ url_for('finance_statement', view='custom', **{'from': date_from, 'to': date_to}) }}">Custom</a>
+</div>
+
+<form method="get" class="panel">
+  <input type="hidden" name="view" value="{{ view }}">
+  <div class="form-grid">
+    {% if view == 'custom' %}
+    <div class="field">
+      <label>From</label>
+      <input type="date" name="from" value="{{ date_from }}">
+    </div>
+    <div class="field">
+      <label>To</label>
+      <input type="date" name="to" value="{{ date_to }}">
+    </div>
+    {% else %}
+    <div class="field">
+      <label>Date</label>
+      <input type="date" name="date" value="{{ selected_date }}">
+    </div>
+    {% endif %}
+    <div class="field">
+      <label>Type</label>
+      <select name="type">
+        <option value="">All types</option>
+        {% for t in transaction_types %}
+        <option value="{{ t }}" {{ 'selected' if txn_type == t }}>{{ t }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="field">
+      <label>Factory</label>
+      <select name="factory_id">
+        <option value="">All factories</option>
+        {% for f in factories %}
+        <option value="{{ f['id'] }}" {{ 'selected' if factory_id == f['id']|string }}>{{ f['name'] }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="field">
+      <label>Employee</label>
+      <select name="employee_id">
+        <option value="">All employees</option>
+        {% for e in employees %}
+        <option value="{{ e['id'] }}" {{ 'selected' if employee_id == e['id']|string }}>{{ e['full_name'] }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="field">
+      <label>Payment / Invoice Status</label>
+      <select name="payment_status">
+        <option value="">Any</option>
+        {% for s in invoice_statuses %}
+        <option value="{{ s }}" {{ 'selected' if payment_status == s }}>{{ s }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="field">
+      <label>Search</label>
+      <input type="text" name="q" value="{{ search }}" placeholder="Description or reference no.">
+    </div>
+    <div class="field">
+      <label>Sort by</label>
+      <select name="sort">
+        <option value="date" {{ 'selected' if sort_by == 'date' }}>Date</option>
+        <option value="reference_no" {{ 'selected' if sort_by == 'reference_no' }}>Reference No.</option>
+        <option value="type" {{ 'selected' if sort_by == 'type' }}>Type</option>
+        <option value="debit" {{ 'selected' if sort_by == 'debit' }}>Debit</option>
+        <option value="credit" {{ 'selected' if sort_by == 'credit' }}>Credit</option>
+        <option value="balance" {{ 'selected' if sort_by == 'balance' }}>Balance</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>Direction</label>
+      <select name="dir">
+        <option value="asc" {{ 'selected' if sort_dir == 'asc' }}>Ascending</option>
+        <option value="desc" {{ 'selected' if sort_dir == 'desc' }}>Descending</option>
+      </select>
+    </div>
+    <div class="field" style="align-self:end;">
+      <button class="btn" type="submit">Apply Filters</button>
+      <a class="btn btn-secondary" href="{{ url_for('finance_statement', view=view, date=selected_date) }}">Reset</a>
+    </div>
+  </div>
+</form>
+
+<div class="cards">
+  <div class="card">
+    <div class="stat">{{ opening_balance }}</div>
+    <div class="label">Opening balance</div>
+  </div>
+  <div class="card">
+    <div class="stat">{{ total_debit }}</div>
+    <div class="label">Total debit</div>
+  </div>
+  <div class="card">
+    <div class="stat">{{ total_credit }}</div>
+    <div class="label">Total credit</div>
+  </div>
+  <div class="card">
+    <div class="stat" style="color: {{ 'var(--tea-green-dark)' if closing_balance >= 0 else 'var(--danger)' }};">{{ closing_balance }}</div>
+    <div class="label">Closing balance</div>
+  </div>
+  <div class="card">
+    <div class="stat">{{ rows|length }}</div>
+    <div class="label">Transactions shown</div>
+  </div>
+</div>
+
+<div class="panel">
+  {% if rows %}
+  <table>
+    <thead>
+      <tr>
+        <th>Date</th><th>Ref No.</th><th>Type</th><th>Description</th>
+        <th>Debit</th><th>Credit</th><th>Balance</th><th>Method</th><th>User</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr style="font-weight:700;">
+        <td colspan="6">Opening Balance</td>
+        <td>{{ opening_balance }}</td>
+        <td></td><td></td>
+      </tr>
+      {% for t in rows %}
+      <tr>
+        <td>{{ t['date'] }}</td>
+        <td>{{ t['reference_no'] }}</td>
+        <td>{{ t['type'] }}</td>
+        <td>{{ t['description'] }}</td>
+        <td>{{ t['debit'] if t['debit'] else '—' }}</td>
+        <td>{{ t['credit'] if t['credit'] else '—' }}</td>
+        <td>{{ t['balance'] }}</td>
+        <td>{{ t['payment_method'] or '—' }}</td>
+        <td>{{ t['user'] or '—' }}</td>
+      </tr>
+      {% endfor %}
+      <tr style="font-weight:700;">
+        <td colspan="4">Totals</td>
+        <td>{{ total_debit }}</td>
+        <td>{{ total_credit }}</td>
+        <td colspan="3"></td>
+      </tr>
+      <tr style="font-weight:700;">
+        <td colspan="6">Closing Balance</td>
+        <td>{{ closing_balance }}</td>
+        <td></td><td></td>
+      </tr>
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty-state">No transactions match these filters in this date range.</div>
+  {% endif %}
+</div>
+{% endblock %}

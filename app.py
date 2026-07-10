@@ -1,6 +1,7 @@
 import io
 import os
-from datetime import datetime
+from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import qrcode
 from flask import Flask, render_template, request, redirect, url_for, flash, send_file, session
@@ -22,6 +23,8 @@ from database import (
     PAYMENT_METHODS,
     INVOICE_STATUSES,
     USER_ROLES,
+    BANK_ACCOUNT_TYPES,
+    PAYROLL_TRANSACTION_STATUSES,
 )
 from utils import (
     compute_attendance_hours,
@@ -34,6 +37,21 @@ from utils import (
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "tea-estate-dev-secret")
 app.teardown_appcontext(close_connection)
+
+# Shown on the printed Finance & Factory Statement header — edit these to your
+# actual registered details; there's no company-profile settings page (yet).
+COMPANY_NAME = "DKNS Tea Lands"
+COMPANY_TAGLINE = "Tea Estate Management System"
+COMPANY_ADDRESS = os.environ.get("COMPANY_ADDRESS", "Tea Estate Office, Sri Lanka")
+COMPANY_PHONE = os.environ.get("COMPANY_PHONE", "+94 00 000 0000")
+COMPANY_EMAIL = os.environ.get("COMPANY_EMAIL", "info@dkns.ai")
+
+
+def _now_text():
+    """Portable 'now' timestamp computed in Python rather than SQL, since
+    SQLite's datetime('now') isn't valid syntax on Postgres."""
+    return datetime.now(timezone.utc).replace(tzinfo=None).isoformat(sep=" ", timespec="seconds")
+
 
 # Create tables on cold start. Safe to call repeatedly (CREATE TABLE IF NOT EXISTS) —
 # needed because on Vercel this module is only ever imported, never run as __main__.
@@ -95,6 +113,13 @@ EMPLOYEE_FIELDS = [
     "hourly_rate",
     "over_target_commission_percent",
     "epf_etf_applicable",
+    "bank_name",
+    "bank_branch",
+    "bank_account_name",
+    "bank_account_number",
+    "bank_branch_code",
+    "bank_account_type",
+    "default_payment_method",
 ]
 
 
@@ -112,6 +137,8 @@ def inject_lookups():
         payment_methods=PAYMENT_METHODS,
         invoice_statuses=INVOICE_STATUSES,
         user_roles=USER_ROLES,
+        bank_account_types=BANK_ACCOUNT_TYPES,
+        payroll_transaction_statuses=PAYROLL_TRANSACTION_STATUSES,
     )
 
 
@@ -504,8 +531,8 @@ def employee_edit(employee_id):
 
         set_clause = ", ".join(f"{f} = ?" for f in EMPLOYEE_FIELDS)
         conn.execute(
-            f"UPDATE employees SET {set_clause}, updated_at = datetime('now') WHERE id = ?",
-            [data[f] for f in EMPLOYEE_FIELDS] + [employee_id],
+            f"UPDATE employees SET {set_clause}, updated_at = ? WHERE id = ?",
+            [data[f] for f in EMPLOYEE_FIELDS] + [_now_text(), employee_id],
         )
         conn.commit()
         flash("Employee updated.", "success")
@@ -578,8 +605,8 @@ def checkin(employee_number):
             record["check_in"], now_time, record["break_start"], record["break_end"]
         )
         conn.execute(
-            "UPDATE attendance SET check_out = ?, total_break_hours = ?, total_work_hours = ?, updated_at = datetime('now') WHERE id = ?",
-            (now_time, total_break, net_work, record["id"]),
+            "UPDATE attendance SET check_out = ?, total_break_hours = ?, total_work_hours = ?, updated_at = ? WHERE id = ?",
+            (now_time, total_break, net_work, _now_text(), record["id"]),
         )
         conn.commit()
         action = "checked_out"
@@ -694,9 +721,9 @@ def attendance_edit(record_id):
         conn.execute(
             """UPDATE attendance SET employee_id=?, date=?, check_in=?, check_out=?,
                break_start=?, break_end=?, total_break_hours=?, total_work_hours=?,
-               status=?, verification_method=?, updated_at=datetime('now') WHERE id=?""",
+               status=?, verification_method=?, updated_at=? WHERE id=?""",
             (employee_id, date, check_in, check_out, break_start, break_end,
-             total_break, net_work, status, verification_method, record_id),
+             total_break, net_work, status, verification_method, _now_text(), record_id),
         )
         conn.commit()
         flash("Attendance updated.", "success")
@@ -890,14 +917,52 @@ def work_assignment_delete(assignment_id):
 
 # ---------- Payroll ----------
 
+SRI_LANKA_TZ = ZoneInfo("Asia/Colombo")
 
-def _payroll_date_range():
-    from datetime import date
 
-    today = date.today()
-    date_from = request.args.get("from", "").strip() or today.replace(day=1).isoformat()
-    date_to = request.args.get("to", "").strip() or today.isoformat()
-    return date_from, date_to
+def _colombo_today():
+    """'Today' as observed in Sri Lanka (UTC+5:30), regardless of the server's
+    own timezone — pay cycles are defined by the Sri Lankan calendar week."""
+    return datetime.now(SRI_LANKA_TZ).date()
+
+
+def _week_bounds(d):
+    """The Monday-Sunday week containing date d."""
+    monday = d - timedelta(days=d.weekday())
+    sunday = monday + timedelta(days=6)
+    return monday, sunday
+
+
+@app.template_filter("lk_date")
+def lk_date(value):
+    """Sri Lankan date display format: 'YYYY-MM-DD' -> 'DD/MM/YYYY'."""
+    if not value:
+        return "—"
+    try:
+        return date.fromisoformat(value).strftime("%d/%m/%Y")
+    except (ValueError, TypeError):
+        return value
+
+
+def _ensure_current_cycle(conn):
+    """The current active pay cycle is the latest Unpaid one. If none exists at
+    all (first-ever use, or every prior cycle has been paid), auto-create a
+    Monday-Sunday cycle for the current Sri Lankan calendar week, due the
+    following Monday."""
+    cycle = conn.execute(
+        "SELECT * FROM payroll_cycles WHERE status = 'Unpaid' ORDER BY cycle_start DESC LIMIT 1"
+    ).fetchone()
+    if cycle:
+        return dict(cycle)
+
+    monday, sunday = _week_bounds(_colombo_today())
+    due_date = sunday + timedelta(days=1)
+    conn.execute(
+        "INSERT INTO payroll_cycles (cycle_start, cycle_end, due_date, status) VALUES (?, ?, ?, 'Unpaid')",
+        (monday.isoformat(), sunday.isoformat(), due_date.isoformat()),
+    )
+    conn.commit()
+    return dict(conn.execute("SELECT * FROM payroll_cycles WHERE cycle_start = ?", (monday.isoformat(),)).fetchone())
 
 
 def _compute_payroll_rows(date_from, date_to, include_advances=False):
@@ -973,7 +1038,10 @@ def _compute_payroll_rows(date_from, date_to, include_advances=False):
 
 @app.route("/payroll")
 def payroll():
-    date_from, date_to = _payroll_date_range()
+    conn = get_connection()
+    cycle = _ensure_current_cycle(conn)
+    date_from, date_to = cycle["cycle_start"], cycle["cycle_end"]
+
     payroll_rows = _compute_payroll_rows(date_from, date_to, include_advances=True)
     total_payment = sum(r["total_pay"] for r in payroll_rows if r["total_pay"])
     total_advances = sum(r["advance_total"] for r in payroll_rows if r["advance_total"])
@@ -983,7 +1051,6 @@ def payroll():
     )
     total_net_pay = sum(r["net_pay"] for r in payroll_rows if r["net_pay"])
 
-    conn = get_connection()
     employees = conn.execute("SELECT id, employee_number, full_name FROM employees ORDER BY full_name").fetchall()
     advances = conn.execute(
         """SELECT sa.*, e.full_name, e.employee_number FROM salary_advances sa
@@ -993,8 +1060,13 @@ def payroll():
         (date_from, date_to),
     ).fetchall()
 
+    today_iso = _colombo_today().isoformat()
+    is_due = today_iso >= cycle["due_date"]
+
     return render_template(
         "payroll.html",
+        cycle=cycle,
+        is_due=is_due,
         rows=payroll_rows,
         date_from=date_from,
         date_to=date_to,
@@ -1008,16 +1080,82 @@ def payroll():
     )
 
 
+@app.route("/payroll/mark-paid", methods=["POST"])
+def payroll_mark_paid():
+    """Freezes the current cycle's payroll figures into payroll_transactions
+    (so later edits to attendance/harvest can never retroactively change a paid
+    cycle's numbers), locks the cycle, and opens the next Monday-Sunday cycle."""
+    conn = get_connection()
+    cycle = _ensure_current_cycle(conn)
+    if cycle["status"] != "Unpaid":
+        flash("This cycle has already been marked as paid.", "error")
+        return redirect(url_for("payroll"))
+
+    date_from, date_to = cycle["cycle_start"], cycle["cycle_end"]
+    payroll_rows = _compute_payroll_rows(date_from, date_to, include_advances=True)
+    today_iso = _colombo_today().isoformat()
+
+    snapshotted = 0
+    for row in payroll_rows:
+        if row["total_pay"] is None:
+            continue  # no rate configured — nothing to pay or freeze
+        employee = conn.execute("SELECT * FROM employees WHERE id = ?", (row["id"],)).fetchone()
+        conn.execute(
+            """INSERT INTO payroll_transactions
+               (cycle_id, employee_id, employee_number, full_name, present_days, total_hours,
+                hourly_rate, hourly_pay, total_output, rate_per_kg, bonus_kg, bonus_pay, harvest_payment,
+                total_pay, advance_total, employee_epf, employer_epf, employer_etf, epf_etf_applicable,
+                net_pay, payment_method, payment_date, payment_status,
+                bank_name, bank_branch, bank_account_name, bank_account_number, bank_branch_code, bank_account_type)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                cycle["id"], row["id"], row["employee_number"], row["full_name"], row["present_days"],
+                row["total_hours"], row["hourly_rate"], row["hourly_pay"], row["total_output"], row["rate_per_kg"],
+                row["bonus_kg"], row["bonus_pay"], row["harvest_payment"], row["total_pay"], row["advance_total"],
+                row["employee_epf"], row["employer_epf"], row["employer_etf"], row["epf_etf_applicable"],
+                row["net_pay"], employee["default_payment_method"] or "Cash", today_iso, "Paid",
+                employee["bank_name"], employee["bank_branch"], employee["bank_account_name"],
+                employee["bank_account_number"], employee["bank_branch_code"], employee["bank_account_type"],
+            ),
+        )
+        snapshotted += 1
+
+    conn.execute(
+        "UPDATE payroll_cycles SET status = 'Paid', paid_at = ? WHERE id = ?", (_now_text(), cycle["id"])
+    )
+
+    next_start = date.fromisoformat(date_to) + timedelta(days=1)
+    next_end = next_start + timedelta(days=6)
+    next_due = next_end + timedelta(days=1)
+    existing_next = conn.execute(
+        "SELECT id FROM payroll_cycles WHERE cycle_start = ?", (next_start.isoformat(),)
+    ).fetchone()
+    if not existing_next:
+        conn.execute(
+            "INSERT INTO payroll_cycles (cycle_start, cycle_end, due_date, status) VALUES (?, ?, ?, 'Unpaid')",
+            (next_start.isoformat(), next_end.isoformat(), next_due.isoformat()),
+        )
+    conn.commit()
+
+    flash(
+        f"Cycle {lk_date(date_from)} to {lk_date(date_to)} marked as paid and archived "
+        f"({snapshotted} employee{'s' if snapshotted != 1 else ''}). Next cycle opened.",
+        "success",
+    )
+    return redirect(url_for("payroll"))
+
+
 @app.route("/payroll/advance", methods=["POST"])
 def payroll_add_advance():
     employee_id = request.form.get("employee_id", "").strip()
     date_value = request.form.get("date", "").strip()
     amount_value = request.form.get("amount", "").strip()
     note = request.form.get("note", "").strip() or None
+    payment_method = request.form.get("payment_method", "").strip() or None
 
     if not employee_id or not date_value:
         flash("Employee and date are required.", "error")
-        return redirect(url_for("payroll", **{"from": date_value, "to": date_value}))
+        return redirect(url_for("payroll"))
 
     try:
         amount = float(amount_value)
@@ -1027,12 +1165,12 @@ def payroll_add_advance():
 
     conn = get_connection()
     conn.execute(
-        "INSERT INTO salary_advances (employee_id, date, amount, note) VALUES (?, ?, ?, ?)",
-        (employee_id, date_value, amount, note),
+        "INSERT INTO salary_advances (employee_id, date, amount, note, payment_method, created_by) VALUES (?, ?, ?, ?, ?, ?)",
+        (employee_id, date_value, amount, note, payment_method, session.get("user_id")),
     )
     conn.commit()
     flash(f"Salary advance of {amount} recorded.", "success")
-    return redirect(url_for("payroll", **{"from": date_value, "to": date_value}))
+    return redirect(url_for("payroll"))
 
 
 @app.route("/payroll/advance/<int:advance_id>/delete", methods=["POST"])
@@ -1046,14 +1184,16 @@ def payroll_delete_advance(advance_id):
     conn.execute("DELETE FROM salary_advances WHERE id = ?", (advance_id,))
     conn.commit()
     flash("Salary advance removed.", "success")
-    return redirect(url_for("payroll", **{"from": advance["date"], "to": advance["date"]}))
+    return redirect(url_for("payroll"))
 
 
 @app.route("/payroll/export.csv")
 def payroll_export():
     import csv
 
-    date_from, date_to = _payroll_date_range()
+    conn = get_connection()
+    cycle = _ensure_current_cycle(conn)
+    date_from, date_to = cycle["cycle_start"], cycle["cycle_end"]
     payroll_rows = _compute_payroll_rows(date_from, date_to, include_advances=True)
 
     buffer = io.StringIO()
@@ -1083,32 +1223,16 @@ def payroll_export():
     )
 
 
-@app.route("/payroll/payslip/<int:employee_id>")
-def payroll_payslip(employee_id):
+def _build_payslip_pdf(row, employee_extra, date_from, date_to, advances, payment_info, download_name):
+    """Shared by the live current-cycle payslip and the Payroll History reprint —
+    `row` supplies the pay figures (from either _compute_payroll_rows or a frozen
+    payroll_transactions snapshot), `employee_extra` supplies position/division/
+    bank details, and `payment_info` supplies payment method/status/date/reference."""
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib.units import mm
     from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
-
-    date_from, date_to = _payroll_date_range()
-
-    conn = get_connection()
-    employee = conn.execute("SELECT * FROM employees WHERE id = ?", (employee_id,)).fetchone()
-    if not employee:
-        flash("Employee not found.", "error")
-        return redirect(url_for("payroll"))
-
-    payroll_rows = _compute_payroll_rows(date_from, date_to, include_advances=True)
-    row = next((r for r in payroll_rows if r["id"] == employee_id), None)
-    if row is None:
-        flash("No payroll data for this employee in the selected period.", "error")
-        return redirect(url_for("payroll", **{"from": date_from, "to": date_to}))
-
-    advances = conn.execute(
-        "SELECT * FROM salary_advances WHERE employee_id = ? AND date BETWEEN ? AND ? ORDER BY date",
-        (employee_id, date_from, date_to),
-    ).fetchall()
 
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
@@ -1119,10 +1243,11 @@ def payroll_payslip(employee_id):
     sub_style = ParagraphStyle("PayslipSub", parent=styles["Normal"], textColor=colors.HexColor("#6b7a67"))
     green = colors.HexColor("#2f5d3a")
     red = colors.HexColor("#b3413a")
+    blue = colors.HexColor("#385580")
     border = colors.HexColor("#dbe5d9")
 
     elements = [
-        Paragraph("DKNS Tea Lands", title_style),
+        Paragraph(COMPANY_NAME, title_style),
         Paragraph("Payslip", sub_style),
         Spacer(1, 10 * mm),
     ]
@@ -1131,9 +1256,9 @@ def payroll_payslip(employee_id):
         [
             ["Employee", row["full_name"]],
             ["Employee ID", row["employee_number"]],
-            ["Position", employee["job_position"] or "—"],
-            ["Division", employee["estate_division"] or "—"],
-            ["Pay period", f"{date_from} to {date_to}"],
+            ["Position", employee_extra.get("job_position") or "—"],
+            ["Division", employee_extra.get("estate_division") or "—"],
+            ["Pay period", f"{lk_date(date_from)} to {lk_date(date_to)}"],
         ],
         colWidths=[40 * mm, 120 * mm],
     )
@@ -1183,7 +1308,7 @@ def payroll_payslip(employee_id):
     deduction_rows = [["Deductions", "Date", "Amount"]]
     if advances:
         for a in advances:
-            deduction_rows.append(["Salary advance", a["date"], a["amount"]])
+            deduction_rows.append(["Salary advance", lk_date(a["date"]), a["amount"]])
     if row["employee_epf"]:
         deduction_rows.append(["EPF (8% employee contribution)", "", row["employee_epf"]])
     if len(deduction_rows) == 1:
@@ -1219,6 +1344,41 @@ def payroll_payslip(employee_id):
             )
         )
 
+    elements.append(Spacer(1, 10 * mm))
+    payment_rows = [
+        ["Payment method", payment_info.get("payment_method") or "—"],
+        ["Payment status", payment_info.get("payment_status") or "Pending"],
+        ["Payment date", lk_date(payment_info.get("payment_date"))],
+        ["Reference / Transaction ID", payment_info.get("payment_reference") or "—"],
+    ]
+    if (employee_extra.get("bank_name") or employee_extra.get("bank_account_number")) and (
+        payment_info.get("payment_method") == "Bank Transfer" or employee_extra.get("bank_name")
+    ):
+        payment_rows.extend(
+            [
+                ["Bank", employee_extra.get("bank_name") or "—"],
+                ["Branch", employee_extra.get("bank_branch") or "—"],
+                ["Branch / BSB Code", employee_extra.get("bank_branch_code") or "—"],
+                ["Account Name", employee_extra.get("bank_account_name") or "—"],
+                ["Account Number", employee_extra.get("bank_account_number") or "—"],
+                ["Account Type", employee_extra.get("bank_account_type") or "—"],
+            ]
+        )
+    payment_table = Table(payment_rows, colWidths=[45 * mm, 115 * mm])
+    payment_table.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, 0), blue),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
+                ("GRID", (0, 0), (-1, -1), 0.5, border),
+            ]
+        )
+    )
+    elements.append(Paragraph("Payment Information", ParagraphStyle("PayInfo", parent=styles["Heading3"], fontSize=11)))
+    elements.append(Spacer(1, 3 * mm))
+    elements.append(payment_table)
+
     doc.build(elements)
     buffer.seek(0)
 
@@ -1226,7 +1386,352 @@ def payroll_payslip(employee_id):
         buffer,
         mimetype="application/pdf",
         as_attachment=True,
+        download_name=download_name,
+    )
+
+
+@app.route("/payroll/payslip/<int:employee_id>")
+def payroll_payslip(employee_id):
+    conn = get_connection()
+    cycle = _ensure_current_cycle(conn)
+    date_from, date_to = cycle["cycle_start"], cycle["cycle_end"]
+
+    employee = conn.execute("SELECT * FROM employees WHERE id = ?", (employee_id,)).fetchone()
+    if not employee:
+        flash("Employee not found.", "error")
+        return redirect(url_for("payroll"))
+
+    payroll_rows = _compute_payroll_rows(date_from, date_to, include_advances=True)
+    row = next((r for r in payroll_rows if r["id"] == employee_id), None)
+    if row is None:
+        flash("No payroll data for this employee in the selected period.", "error")
+        return redirect(url_for("payroll"))
+
+    advances = conn.execute(
+        "SELECT * FROM salary_advances WHERE employee_id = ? AND date BETWEEN ? AND ? ORDER BY date",
+        (employee_id, date_from, date_to),
+    ).fetchall()
+
+    employee_extra = dict(employee)
+    payment_info = {
+        "payment_method": employee["default_payment_method"],
+        "payment_status": "Pending",
+        "payment_date": None,
+        "payment_reference": None,
+    }
+
+    return _build_payslip_pdf(
+        row, employee_extra, date_from, date_to, advances, payment_info,
         download_name=f"payslip_{row['employee_number']}_{date_from}_to_{date_to}.pdf",
+    )
+
+
+# ---------- Payroll History ----------
+
+
+@app.route("/payroll/history")
+def payroll_history():
+    conn = get_connection()
+
+    search = request.args.get("q", "").strip().lower()
+    date_from = request.args.get("from", "").strip()
+    date_to = request.args.get("to", "").strip()
+
+    query = "SELECT * FROM payroll_cycles WHERE status = 'Paid'"
+    params = []
+    if date_from:
+        query += " AND cycle_end >= ?"
+        params.append(date_from)
+    if date_to:
+        query += " AND cycle_start <= ?"
+        params.append(date_to)
+    query += " ORDER BY cycle_start DESC"
+    cycles = [dict(c) for c in conn.execute(query, params).fetchall()]
+
+    for c in cycles:
+        totals = conn.execute(
+            """SELECT COUNT(*) AS employee_count, COALESCE(SUM(net_pay), 0) AS total_net_pay,
+                      COALESCE(SUM(total_pay), 0) AS total_gross_pay
+               FROM payroll_transactions WHERE cycle_id = ?""",
+            (c["id"],),
+        ).fetchone()
+        c["employee_count"] = totals["employee_count"]
+        c["total_net_pay"] = round(totals["total_net_pay"], 2)
+        c["total_gross_pay"] = round(totals["total_gross_pay"], 2)
+
+    if search:
+        def _matches(c):
+            if search in c["cycle_start"] or search in c["cycle_end"]:
+                return True
+            names = conn.execute(
+                "SELECT full_name FROM payroll_transactions WHERE cycle_id = ?", (c["id"],)
+            ).fetchall()
+            return any(search in n["full_name"].lower() for n in names)
+
+        cycles = [c for c in cycles if _matches(c)]
+
+    return render_template("payroll_history.html", cycles=cycles, search=search, date_from=date_from, date_to=date_to)
+
+
+@app.route("/payroll/history/<int:cycle_id>")
+def payroll_cycle_detail(cycle_id):
+    conn = get_connection()
+    cycle = conn.execute("SELECT * FROM payroll_cycles WHERE id = ?", (cycle_id,)).fetchone()
+    if not cycle:
+        flash("Payroll cycle not found.", "error")
+        return redirect(url_for("payroll_history"))
+
+    transactions = conn.execute(
+        "SELECT * FROM payroll_transactions WHERE cycle_id = ? ORDER BY full_name", (cycle_id,)
+    ).fetchall()
+    total_net_pay = round(sum(t["net_pay"] or 0 for t in transactions), 2)
+    total_gross_pay = round(sum(t["total_pay"] or 0 for t in transactions), 2)
+
+    return render_template(
+        "payroll_cycle_detail.html",
+        cycle=cycle,
+        transactions=transactions,
+        total_net_pay=total_net_pay,
+        total_gross_pay=total_gross_pay,
+    )
+
+
+@app.route("/payroll/history/<int:cycle_id>/transactions/<int:transaction_id>/update", methods=["POST"])
+def payroll_transaction_update(cycle_id, transaction_id):
+    conn = get_connection()
+    transaction = conn.execute(
+        "SELECT * FROM payroll_transactions WHERE id = ? AND cycle_id = ?", (transaction_id, cycle_id)
+    ).fetchone()
+    if not transaction:
+        flash("Payroll transaction not found.", "error")
+        return redirect(url_for("payroll_cycle_detail", cycle_id=cycle_id))
+
+    payment_method = request.form.get("payment_method", "").strip()
+    payment_status = request.form.get("payment_status", "").strip()
+    payment_date = request.form.get("payment_date", "").strip() or None
+    payment_reference = request.form.get("payment_reference", "").strip() or None
+
+    if payment_method not in PAYMENT_METHODS or payment_status not in PAYROLL_TRANSACTION_STATUSES:
+        flash("Select a valid payment method and status.", "error")
+        return redirect(url_for("payroll_cycle_detail", cycle_id=cycle_id))
+
+    conn.execute(
+        """UPDATE payroll_transactions
+           SET payment_method = ?, payment_status = ?, payment_date = ?, payment_reference = ?
+           WHERE id = ?""",
+        (payment_method, payment_status, payment_date, payment_reference, transaction_id),
+    )
+    conn.commit()
+    flash(f"Payment record updated for {transaction['full_name']}.", "success")
+    return redirect(url_for("payroll_cycle_detail", cycle_id=cycle_id))
+
+
+@app.route("/payroll/history/<int:cycle_id>/export.csv")
+def payroll_cycle_export(cycle_id):
+    import csv
+
+    conn = get_connection()
+    cycle = conn.execute("SELECT * FROM payroll_cycles WHERE id = ?", (cycle_id,)).fetchone()
+    if not cycle:
+        flash("Payroll cycle not found.", "error")
+        return redirect(url_for("payroll_history"))
+
+    transactions = conn.execute(
+        "SELECT * FROM payroll_transactions WHERE cycle_id = ? ORDER BY full_name", (cycle_id,)
+    ).fetchall()
+
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(
+        [
+            "Employee Number", "Full Name", "Present Days", "Hours Worked", "Hourly Rate", "Time-based Pay",
+            "Harvest (kg)", "Rate/kg", "Bonus (kg)", "Harvest Pay", "Total Pay", "Salary Advance",
+            "Employee EPF (8%)", "Net Pay", "Employer EPF (12%)", "Employer ETF (3%)",
+            "Payment Method", "Payment Date", "Payment Reference", "Payment Status",
+            "Bank Name", "Bank Branch", "Branch/BSB Code", "Account Name", "Account Number", "Account Type",
+        ]
+    )
+    for t in transactions:
+        writer.writerow(
+            [
+                t["employee_number"], t["full_name"], t["present_days"], t["total_hours"], t["hourly_rate"],
+                t["hourly_pay"], t["total_output"], t["rate_per_kg"], t["bonus_kg"], t["harvest_payment"],
+                t["total_pay"], t["advance_total"], t["employee_epf"], t["net_pay"], t["employer_epf"],
+                t["employer_etf"], t["payment_method"], t["payment_date"], t["payment_reference"], t["payment_status"],
+                t["bank_name"], t["bank_branch"], t["bank_branch_code"], t["bank_account_name"],
+                t["bank_account_number"], t["bank_account_type"],
+            ]
+        )
+
+    csv_bytes = io.BytesIO(buffer.getvalue().encode("utf-8"))
+    return send_file(
+        csv_bytes,
+        mimetype="text/csv",
+        as_attachment=True,
+        download_name=f"payroll_{cycle['cycle_start']}_to_{cycle['cycle_end']}.csv",
+    )
+
+
+@app.route("/payroll/history/<int:cycle_id>/payslip/<int:employee_id>")
+def payroll_history_payslip(cycle_id, employee_id):
+    conn = get_connection()
+    cycle = conn.execute("SELECT * FROM payroll_cycles WHERE id = ?", (cycle_id,)).fetchone()
+    if not cycle:
+        flash("Payroll cycle not found.", "error")
+        return redirect(url_for("payroll_history"))
+
+    t = conn.execute(
+        "SELECT * FROM payroll_transactions WHERE cycle_id = ? AND employee_id = ?", (cycle_id, employee_id)
+    ).fetchone()
+    if not t:
+        flash("No payroll record for this employee in that cycle.", "error")
+        return redirect(url_for("payroll_cycle_detail", cycle_id=cycle_id))
+
+    row = dict(t)
+    employee = conn.execute("SELECT job_position, estate_division FROM employees WHERE id = ?", (employee_id,)).fetchone()
+    employee_extra = dict(employee) if employee else {}
+    employee_extra.update(
+        {
+            "bank_name": t["bank_name"], "bank_branch": t["bank_branch"], "bank_account_name": t["bank_account_name"],
+            "bank_account_number": t["bank_account_number"], "bank_branch_code": t["bank_branch_code"],
+            "bank_account_type": t["bank_account_type"],
+        }
+    )
+    advances = conn.execute(
+        "SELECT * FROM salary_advances WHERE employee_id = ? AND date BETWEEN ? AND ? ORDER BY date",
+        (employee_id, cycle["cycle_start"], cycle["cycle_end"]),
+    ).fetchall()
+    payment_info = {
+        "payment_method": t["payment_method"],
+        "payment_status": t["payment_status"],
+        "payment_date": t["payment_date"],
+        "payment_reference": t["payment_reference"],
+    }
+
+    return _build_payslip_pdf(
+        row, employee_extra, cycle["cycle_start"], cycle["cycle_end"], advances, payment_info,
+        download_name=f"payslip_{row['employee_number']}_{cycle['cycle_start']}_to_{cycle['cycle_end']}.pdf",
+    )
+
+
+@app.route("/payroll/history/<int:cycle_id>/pdf")
+def payroll_cycle_pdf(cycle_id):
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4, landscape
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import mm
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+    from reportlab.pdfgen import canvas as pdfcanvas
+
+    conn = get_connection()
+    cycle = conn.execute("SELECT * FROM payroll_cycles WHERE id = ?", (cycle_id,)).fetchone()
+    if not cycle:
+        flash("Payroll cycle not found.", "error")
+        return redirect(url_for("payroll_history"))
+
+    transactions = conn.execute(
+        "SELECT * FROM payroll_transactions WHERE cycle_id = ? ORDER BY full_name", (cycle_id,)
+    ).fetchall()
+
+    pagesize = landscape(A4)
+    page_width = pagesize[0]
+    green = colors.HexColor("#2f5d3a")
+    dark_green = colors.HexColor("#1f4028")
+    border = colors.HexColor("#dbe5d9")
+    muted = colors.HexColor("#6b7a67")
+
+    class NumberedCanvas(pdfcanvas.Canvas):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._saved_page_states = []
+
+        def showPage(self):
+            self._saved_page_states.append(dict(self.__dict__))
+            self._startPage()
+
+        def save(self):
+            total_pages = len(self._saved_page_states)
+            for state in self._saved_page_states:
+                self.__dict__.update(state)
+                self.setFont("Helvetica", 8)
+                self.setFillColor(muted)
+                self.drawRightString(page_width - 15 * mm, 10 * mm, f"Page {self._pageNumber} of {total_pages}")
+                super().showPage()
+            super().save()
+
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buffer, pagesize=pagesize, topMargin=15 * mm, bottomMargin=18 * mm, leftMargin=15 * mm, rightMargin=15 * mm
+    )
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle("ReportTitle", parent=styles["Title"], fontSize=18, textColor=dark_green)
+    sub_style = ParagraphStyle("ReportSub", parent=styles["Normal"], textColor=muted, fontSize=9)
+
+    elements = [
+        Paragraph(COMPANY_NAME, title_style),
+        Paragraph(f"{COMPANY_ADDRESS} &middot; {COMPANY_PHONE}", sub_style),
+        Spacer(1, 6 * mm),
+        Paragraph("PAYROLL REPORT", ParagraphStyle("ReportHead", parent=styles["Heading2"], fontSize=13, textColor=dark_green)),
+        Paragraph(
+            f"Pay period: {lk_date(cycle['cycle_start'])} to {lk_date(cycle['cycle_end'])} "
+            f"&middot; Due: {lk_date(cycle['due_date'])} &middot; Status: {cycle['status']}",
+            sub_style,
+        ),
+        Spacer(1, 6 * mm),
+    ]
+
+    table_rows = [["Employee", "Hours", "Harvest (kg)", "Gross Pay", "Advance", "EPF", "Net Pay", "Method", "Status"]]
+    for t in transactions:
+        table_rows.append(
+            [
+                f"{t['full_name']} ({t['employee_number']})", t["total_hours"] or "—", t["total_output"] or "—",
+                t["total_pay"] or "—", t["advance_total"] or "—", t["employee_epf"] or "—", t["net_pay"] or "—",
+                t["payment_method"] or "—", t["payment_status"],
+            ]
+        )
+    total_net = round(sum(t["net_pay"] or 0 for t in transactions), 2)
+    total_gross = round(sum(t["total_pay"] or 0 for t in transactions), 2)
+    table_rows.append(["Totals", "", "", total_gross, "", "", total_net, "", ""])
+
+    available_width = page_width - 30 * mm
+    col_widths = [w * available_width for w in (0.22, 0.09, 0.11, 0.11, 0.09, 0.08, 0.11, 0.1, 0.09)]
+    report_table = Table(table_rows, colWidths=col_widths, repeatRows=1)
+    report_table.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, 0), green),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
+                ("FONTSIZE", (0, 0), (-1, -1), 8.5),
+                ("GRID", (0, 0), (-1, -1), 0.4, border),
+                ("ALIGN", (1, 0), (6, -1), "RIGHT"),
+                ("LINEABOVE", (0, -1), (-1, -1), 0.75, dark_green),
+            ]
+        )
+    )
+    elements.append(report_table)
+    elements.append(Spacer(1, 12 * mm))
+
+    sig_table = Table(
+        [
+            ["_________________________", "", "_________________________"],
+            ["Prepared by", "", "Authorized by"],
+            ["Name / Date", "", "Name / Date"],
+        ],
+        colWidths=[available_width * 0.4, available_width * 0.2, available_width * 0.4],
+    )
+    sig_table.setStyle(TableStyle([("FONTNAME", (0, 1), (-1, 1), "Helvetica-Bold"), ("TEXTCOLOR", (0, 1), (-1, -1), muted)]))
+    elements.append(sig_table)
+
+    doc.build(elements, canvasmaker=NumberedCanvas)
+    buffer.seek(0)
+
+    return send_file(
+        buffer,
+        mimetype="application/pdf",
+        as_attachment=False,
+        download_name=f"payroll_report_{cycle['cycle_start']}_to_{cycle['cycle_end']}.pdf",
     )
 
 
@@ -1385,6 +1890,7 @@ def income_add_expense():
     category = request.form.get("category", "").strip()
     amount_value = request.form.get("amount", "").strip()
     note = request.form.get("note", "").strip() or None
+    payment_method = request.form.get("payment_method", "").strip() or None
 
     if category not in EXPENSE_CATEGORIES:
         flash("Invalid expense category.", "error")
@@ -1398,8 +1904,8 @@ def income_add_expense():
 
     conn = get_connection()
     conn.execute(
-        "INSERT INTO expenses (date, category, amount, note) VALUES (?, ?, ?, ?)",
-        (date_value, category, amount, note),
+        "INSERT INTO expenses (date, category, amount, note, payment_method, created_by) VALUES (?, ?, ?, ?, ?, ?)",
+        (date_value, category, amount, note, payment_method, session.get("user_id")),
     )
     conn.commit()
     flash(f"{category} expense of {amount} added for {date_value}.", "success")
@@ -1433,9 +1939,10 @@ def income_set_price():
 
     conn = get_connection()
     conn.execute(
-        """INSERT INTO daily_prices (date, price_per_kg) VALUES (?, ?)
-           ON CONFLICT(date) DO UPDATE SET price_per_kg = excluded.price_per_kg, updated_at = datetime('now')""",
-        (date_value, price),
+        """INSERT INTO daily_prices (date, price_per_kg, created_by, updated_at) VALUES (?, ?, ?, ?)
+           ON CONFLICT(date) DO UPDATE SET price_per_kg = excluded.price_per_kg,
+               created_by = excluded.created_by, updated_at = excluded.updated_at""",
+        (date_value, price, session.get("user_id"), _now_text()),
     )
     conn.commit()
     flash(f"Tea price for {date_value} set to {price}.", "success")
@@ -1696,9 +2203,9 @@ def delivery_new():
 
         conn.execute(
             """INSERT INTO factory_deliveries
-               (delivery_date, factory_id, estate_weight, factory_weight, vehicle_number, driver_name, notes)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (delivery_date, factory_id, estate_weight, factory_weight, vehicle_number, driver_name, notes),
+               (delivery_date, factory_id, estate_weight, factory_weight, vehicle_number, driver_name, notes, created_by)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (delivery_date, factory_id, estate_weight, factory_weight, vehicle_number, driver_name, notes, session.get("user_id")),
         )
         conn.commit()
         flash("Delivery recorded.", "success")
@@ -1779,9 +2286,10 @@ def invoice_new():
 
         try:
             cursor = conn.execute(
-                """INSERT INTO invoices (invoice_number, factory_id, invoice_date, price_per_kg, total_weight, total_amount)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
-                (invoice_number, factory_id, invoice_date, price_per_kg, total_weight, total_amount),
+                """INSERT INTO invoices
+                   (invoice_number, factory_id, invoice_date, price_per_kg, total_weight, total_amount, created_by)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (invoice_number, factory_id, invoice_date, price_per_kg, total_weight, total_amount, session.get("user_id")),
             )
         except IntegrityError:
             flash("An invoice with that number already exists.", "error")
@@ -2029,9 +2537,9 @@ def invoice_add_payment(invoice_id):
         return redirect(url_for("invoice_detail", invoice_id=invoice_id))
 
     conn.execute(
-        """INSERT INTO invoice_payments (invoice_id, payment_date, amount, method, reference_number, note)
-           VALUES (?, ?, ?, ?, ?, ?)""",
-        (invoice_id, payment_date, amount, method, reference_number, note),
+        """INSERT INTO invoice_payments (invoice_id, payment_date, amount, method, reference_number, note, created_by)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (invoice_id, payment_date, amount, method, reference_number, note, session.get("user_id")),
     )
     _recompute_invoice_status(conn, invoice_id, invoice["total_amount"])
     conn.commit()
@@ -2054,6 +2562,532 @@ def invoice_delete_payment(invoice_id, payment_id):
 
     flash("Payment removed.", "success")
     return redirect(url_for("invoice_detail", invoice_id=invoice_id))
+
+
+# ---------- Finance & Factory Statement (unified ledger) ----------
+
+TRANSACTION_TYPES = ["Income", "Expense", "Payroll", "Salary Advance", "Delivery", "Invoice", "Factory Payment"]
+
+
+def _build_payroll_ledger_entries(conn):
+    """One Payroll debit entry per employee per day worked, so the ledger can be
+    filtered by employee and matches the true_labor_cost figure used elsewhere
+    (Income & Profit, Finance dashboard) — harvest + hourly pay, plus the
+    employer's own EPF/ETF contribution on top (a real cash cost either way,
+    whether it ends up as the employee's net pay or paid into the EPF/ETF fund
+    on their behalf)."""
+    entries = []
+    employees = conn.execute(
+        """SELECT id, employee_number, full_name, rate_per_kg, hourly_rate,
+                  over_target_commission_percent, epf_etf_applicable
+           FROM employees"""
+    ).fetchall()
+
+    for e in employees:
+        assignments = conn.execute(
+            "SELECT date, actual_output, harvest_target FROM work_assignments WHERE employee_id = ?", (e["id"],)
+        ).fetchall()
+        attendance = conn.execute(
+            "SELECT date, total_work_hours FROM attendance WHERE employee_id = ?", (e["id"],)
+        ).fetchall()
+
+        harvest_pay_by_date, kg_by_date, hours_by_date = {}, {}, {}
+        for a in assignments:
+            kg_by_date[a["date"]] = kg_by_date.get(a["date"], 0) + (a["actual_output"] or 0)
+            if e["rate_per_kg"]:
+                pay = compute_harvest_pay(
+                    a["actual_output"] or 0, a["harvest_target"], e["rate_per_kg"], e["over_target_commission_percent"]
+                )
+                harvest_pay_by_date[a["date"]] = harvest_pay_by_date.get(a["date"], 0) + pay["total_pay"]
+        for a in attendance:
+            hours_by_date[a["date"]] = hours_by_date.get(a["date"], 0) + (a["total_work_hours"] or 0)
+
+        for d in set(harvest_pay_by_date) | set(hours_by_date):
+            harvest_pay = round(harvest_pay_by_date.get(d, 0), 2)
+            hourly_pay = round(hours_by_date.get(d, 0) * e["hourly_rate"], 2) if e["hourly_rate"] else 0
+            total_pay = round(harvest_pay + hourly_pay, 2)
+            if total_pay <= 0:
+                continue
+
+            epf_etf = compute_epf_etf(total_pay, e["epf_etf_applicable"])
+            true_cost = round(total_pay + epf_etf["employer_epf"] + epf_etf["employer_etf"], 2)
+
+            detail_parts = []
+            if kg_by_date.get(d):
+                detail_parts.append(f"{round(kg_by_date[d], 2)} kg harvest")
+            if hours_by_date.get(d):
+                detail_parts.append(f"{round(hours_by_date[d], 2)} h")
+            detail = " + ".join(detail_parts) if detail_parts else "pay"
+
+            note = ""
+            if e["epf_etf_applicable"]:
+                note = (
+                    f" (incl. employee EPF deduction {epf_etf['employee_epf']}, "
+                    f"employer EPF/ETF {round(epf_etf['employer_epf'] + epf_etf['employer_etf'], 2)})"
+                )
+
+            entries.append(
+                {
+                    "date": d,
+                    "type": "Payroll",
+                    "reference_no": f"PAY-{e['id']}-{d}",
+                    "description": f"Payroll — {e['full_name']} ({e['employee_number']}): {detail}{note}",
+                    "debit": true_cost,
+                    "credit": 0,
+                    "payment_method": None,
+                    "user": None,
+                    "factory": None,
+                    "factory_id": None,
+                    "employee": e["full_name"],
+                    "employee_id": e["id"],
+                    "status": None,
+                }
+            )
+    return entries
+
+
+def _build_ledger(conn):
+    """Normalizes every financial event across the app (accrued daily tea income,
+    expenses, payroll cost, salary advances, factory deliveries, invoices, and
+    invoice payments) into one common transaction shape, sorted chronologically.
+    This is computed on the fly from the existing source tables rather than
+    stored in its own table, so it can never drift out of sync with them."""
+    usernames = {u["id"]: u["username"] for u in conn.execute("SELECT id, username FROM users").fetchall()}
+
+    entries = []
+
+    for r in conn.execute(
+        """SELECT w.date AS date, SUM(w.actual_output) AS kg, dp.price_per_kg AS price, dp.created_by AS created_by
+           FROM work_assignments w JOIN daily_prices dp ON dp.date = w.date
+           GROUP BY w.date, dp.price_per_kg, dp.created_by
+           HAVING SUM(w.actual_output) > 0"""
+    ).fetchall():
+        kg = round(r["kg"], 2)
+        entries.append(
+            {
+                "date": r["date"],
+                "type": "Income",
+                "reference_no": f"INC-{r['date']}",
+                "description": f"Tea income — {kg} kg harvested @ {r['price']}/kg",
+                "debit": 0,
+                "credit": round(kg * r["price"], 2),
+                "payment_method": None,
+                "user": usernames.get(r["created_by"]),
+                "factory": None,
+                "factory_id": None,
+                "employee": None,
+                "employee_id": None,
+                "status": None,
+            }
+        )
+
+    for r in conn.execute("SELECT * FROM expenses").fetchall():
+        desc = r["category"]
+        if r["note"]:
+            desc += f" — {r['note']}"
+        entries.append(
+            {
+                "date": r["date"],
+                "type": "Expense",
+                "reference_no": f"EXP-{r['id']}",
+                "description": desc,
+                "debit": round(r["amount"], 2),
+                "credit": 0,
+                "payment_method": r["payment_method"],
+                "user": usernames.get(r["created_by"]),
+                "factory": None,
+                "factory_id": None,
+                "employee": None,
+                "employee_id": None,
+                "status": None,
+            }
+        )
+
+    entries.extend(_build_payroll_ledger_entries(conn))
+
+    for r in conn.execute(
+        """SELECT sa.*, e.full_name, e.employee_number FROM salary_advances sa
+           JOIN employees e ON e.id = sa.employee_id"""
+    ).fetchall():
+        desc = f"Salary advance — {r['full_name']} ({r['employee_number']})"
+        if r["note"]:
+            desc += f" — {r['note']}"
+        entries.append(
+            {
+                "date": r["date"],
+                "type": "Salary Advance",
+                "reference_no": f"ADV-{r['id']}",
+                "description": desc,
+                "debit": round(r["amount"], 2),
+                "credit": 0,
+                "payment_method": r["payment_method"],
+                "user": usernames.get(r["created_by"]),
+                "factory": None,
+                "factory_id": None,
+                "employee": r["full_name"],
+                "employee_id": r["employee_id"],
+                "status": None,
+            }
+        )
+
+    for r in conn.execute(
+        "SELECT d.*, f.name AS factory_name FROM factory_deliveries d JOIN factories f ON f.id = d.factory_id"
+    ).fetchall():
+        status_note = "invoiced" if r["invoice_id"] else "awaiting invoice"
+        entries.append(
+            {
+                "date": r["delivery_date"],
+                "type": "Delivery",
+                "reference_no": f"DEL-{r['id']}",
+                "description": f"Delivery to {r['factory_name']} — {r['factory_weight']} kg ({status_note})",
+                "debit": 0,
+                "credit": 0,
+                "payment_method": None,
+                "user": usernames.get(r["created_by"]),
+                "factory": r["factory_name"],
+                "factory_id": r["factory_id"],
+                "employee": None,
+                "employee_id": None,
+                "status": None,
+            }
+        )
+
+    for r in conn.execute(
+        "SELECT i.*, f.name AS factory_name FROM invoices i JOIN factories f ON f.id = i.factory_id"
+    ).fetchall():
+        entries.append(
+            {
+                "date": r["invoice_date"],
+                "type": "Invoice",
+                "reference_no": f"INV-{r['invoice_number']}",
+                "description": (
+                    f"Invoice raised to {r['factory_name']} — {r['total_weight']} kg "
+                    f"@ {r['price_per_kg']}/kg = {r['total_amount']}"
+                ),
+                "debit": 0,
+                "credit": 0,
+                "payment_method": None,
+                "user": usernames.get(r["created_by"]),
+                "factory": r["factory_name"],
+                "factory_id": r["factory_id"],
+                "employee": None,
+                "employee_id": None,
+                "status": r["status"],
+            }
+        )
+
+    for r in conn.execute(
+        """SELECT p.*, i.invoice_number, i.status AS invoice_status, f.name AS factory_name, f.id AS factory_id
+           FROM invoice_payments p
+           JOIN invoices i ON i.id = p.invoice_id
+           JOIN factories f ON f.id = i.factory_id"""
+    ).fetchall():
+        desc = f"Payment received — Invoice {r['invoice_number']} ({r['factory_name']})"
+        if r["note"]:
+            desc += f" — {r['note']}"
+        entries.append(
+            {
+                "date": r["payment_date"],
+                "type": "Factory Payment",
+                "reference_no": f"PMT-{r['id']}",
+                "description": desc,
+                "debit": 0,
+                "credit": round(r["amount"], 2),
+                "payment_method": r["method"],
+                "user": usernames.get(r["created_by"]),
+                "factory": r["factory_name"],
+                "factory_id": r["factory_id"],
+                "employee": None,
+                "employee_id": None,
+                "status": r["invoice_status"],
+            }
+        )
+
+    entries.sort(key=lambda t: (t["date"], t["type"], t["reference_no"]))
+    return entries
+
+
+def _get_statement_data():
+    """Shared by the HTML page, CSV export, and PDF export, so all three always
+    show exactly the same filtered rows and the same opening/closing balance."""
+    view, date_from, date_to, anchor_date = _income_date_range()
+    conn = get_connection()
+
+    txn_type = request.args.get("type", "").strip()
+    factory_id = request.args.get("factory_id", "").strip()
+    employee_id = request.args.get("employee_id", "").strip()
+    payment_status = request.args.get("payment_status", "").strip()
+    search = request.args.get("q", "").strip().lower()
+    sort_by = request.args.get("sort", "date").strip()
+    sort_dir = request.args.get("dir", "asc").strip()
+
+    all_entries = _build_ledger(conn)
+
+    def matches_filters(t):
+        if txn_type and t["type"] != txn_type:
+            return False
+        if factory_id and str(t.get("factory_id")) != factory_id:
+            return False
+        if employee_id and str(t.get("employee_id")) != employee_id:
+            return False
+        if payment_status:
+            if t["type"] not in ("Invoice", "Factory Payment") or t.get("status") != payment_status:
+                return False
+        return True
+
+    filtered = [t for t in all_entries if matches_filters(t)]
+    before_range = [t for t in filtered if t["date"] < date_from]
+    in_range = [t for t in filtered if date_from <= t["date"] <= date_to]
+
+    opening_balance = round(sum(t["credit"] - t["debit"] for t in before_range), 2)
+
+    running = opening_balance
+    for seq, t in enumerate(in_range):
+        running = round(running + t["credit"] - t["debit"], 2)
+        t["balance"] = running
+        t["_seq"] = seq  # preserves the balance-computation order as the default display order
+
+    total_debit = round(sum(t["debit"] for t in in_range), 2)
+    total_credit = round(sum(t["credit"] for t in in_range), 2)
+    closing_balance = round(opening_balance + total_credit - total_debit, 2)
+
+    rows = in_range
+    if search:
+        rows = [t for t in rows if search in t["description"].lower() or search in t["reference_no"].lower()]
+
+    sort_key_map = {
+        "date": lambda t: (t["date"], t["_seq"]),
+        "reference_no": lambda t: t["reference_no"],
+        "type": lambda t: t["type"],
+        "debit": lambda t: t["debit"],
+        "credit": lambda t: t["credit"],
+        "balance": lambda t: t["balance"],
+    }
+    rows = sorted(rows, key=sort_key_map.get(sort_by, sort_key_map["date"]), reverse=(sort_dir == "desc"))
+
+    factories = conn.execute("SELECT * FROM factories ORDER BY name").fetchall()
+    employees = conn.execute("SELECT * FROM employees ORDER BY full_name").fetchall()
+
+    return {
+        "view": view,
+        "selected_date": anchor_date,
+        "date_from": date_from,
+        "date_to": date_to,
+        "txn_type": txn_type,
+        "factory_id": factory_id,
+        "employee_id": employee_id,
+        "payment_status": payment_status,
+        "search": search,
+        "sort_by": sort_by,
+        "sort_dir": sort_dir,
+        "rows": rows,
+        "opening_balance": opening_balance,
+        "closing_balance": closing_balance,
+        "total_debit": total_debit,
+        "total_credit": total_credit,
+        "factories": factories,
+        "employees": employees,
+        "transaction_types": TRANSACTION_TYPES,
+    }
+
+
+@app.route("/finance/statement")
+def finance_statement():
+    return render_template("finance_statement.html", **_get_statement_data())
+
+
+@app.route("/finance/statement/export.csv")
+def finance_statement_csv():
+    import csv
+
+    data = _get_statement_data()
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(
+        ["Date", "Reference No.", "Type", "Description", "Debit", "Credit", "Balance", "Payment Method", "User"]
+    )
+    for t in data["rows"]:
+        writer.writerow(
+            [
+                t["date"], t["reference_no"], t["type"], t["description"],
+                t["debit"] or "", t["credit"] or "", t["balance"],
+                t["payment_method"] or "", t["user"] or "",
+            ]
+        )
+    writer.writerow([])
+    writer.writerow(["", "", "", "Opening Balance", "", "", data["opening_balance"], "", ""])
+    writer.writerow(["", "", "", "Total", data["total_debit"], data["total_credit"], "", "", ""])
+    writer.writerow(["", "", "", "Closing Balance", "", "", data["closing_balance"], "", ""])
+
+    csv_bytes = io.BytesIO(buffer.getvalue().encode("utf-8"))
+    return send_file(
+        csv_bytes,
+        mimetype="text/csv",
+        as_attachment=True,
+        download_name=f"statement_{data['date_from']}_to_{data['date_to']}.csv",
+    )
+
+
+@app.route("/finance/statement/pdf")
+def finance_statement_pdf():
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4, landscape
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import mm
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+    from reportlab.pdfgen import canvas as pdfcanvas
+
+    data = _get_statement_data()
+    orientation = request.args.get("orientation", "landscape").strip()
+    pagesize = landscape(A4) if orientation == "landscape" else A4
+    page_width = pagesize[0]
+
+    green = colors.HexColor("#2f5d3a")
+    dark_green = colors.HexColor("#1f4028")
+    border = colors.HexColor("#dbe5d9")
+    muted = colors.HexColor("#6b7a67")
+
+    class NumberedCanvas(pdfcanvas.Canvas):
+        """Defers writing 'Page X of Y' until save(), since the total page count
+        isn't known while pages are still being drawn."""
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._saved_page_states = []
+
+        def showPage(self):
+            self._saved_page_states.append(dict(self.__dict__))
+            self._startPage()
+
+        def save(self):
+            total_pages = len(self._saved_page_states)
+            for state in self._saved_page_states:
+                self.__dict__.update(state)
+                self.setFont("Helvetica", 8)
+                self.setFillColor(muted)
+                self.drawRightString(
+                    page_width - 15 * mm, 10 * mm, f"Page {self._pageNumber} of {total_pages}"
+                )
+                super().showPage()
+            super().save()
+
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buffer, pagesize=pagesize, topMargin=15 * mm, bottomMargin=18 * mm, leftMargin=15 * mm, rightMargin=15 * mm
+    )
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle("StatementTitle", parent=styles["Title"], fontSize=18, spaceAfter=0, textColor=dark_green)
+    sub_style = ParagraphStyle("StatementSub", parent=styles["Normal"], textColor=muted, fontSize=9)
+    section_style = ParagraphStyle("StatementSection", parent=styles["Heading2"], fontSize=11, textColor=dark_green)
+
+    elements = []
+
+    header_table = Table(
+        [
+            [
+                Table([["DKNS"]], colWidths=[16 * mm], rowHeights=[16 * mm],
+                      style=TableStyle([
+                          ("BACKGROUND", (0, 0), (-1, -1), green),
+                          ("TEXTCOLOR", (0, 0), (-1, -1), colors.white),
+                          ("FONTNAME", (0, 0), (-1, -1), "Helvetica-Bold"),
+                          ("FONTSIZE", (0, 0), (-1, -1), 9),
+                          ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+                          ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                      ])),
+                Paragraph(
+                    f"{COMPANY_NAME}<br/><font size=9 color='#6b7a67'>{COMPANY_TAGLINE}</font>", title_style
+                ),
+                Paragraph(
+                    f"{COMPANY_ADDRESS}<br/>{COMPANY_PHONE} &middot; {COMPANY_EMAIL}", sub_style
+                ),
+            ]
+        ],
+        colWidths=[20 * mm, page_width - 20 * mm - 90 * mm - 30 * mm, 90 * mm],
+    )
+    header_table.setStyle(
+        TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"), ("ALIGN", (2, 0), (2, 0), "RIGHT")])
+    )
+    elements.append(header_table)
+    elements.append(Spacer(1, 4 * mm))
+
+    period_label = f"{data['date_from']} to {data['date_to']}" if data["date_from"] != data["date_to"] else data["date_from"]
+    elements.append(Paragraph("FINANCE &amp; FACTORY STATEMENT", section_style))
+    elements.append(Paragraph(f"Statement period: {period_label}", sub_style))
+
+    filter_bits = []
+    if data["txn_type"]:
+        filter_bits.append(f"Type: {data['txn_type']}")
+    if data["payment_status"]:
+        filter_bits.append(f"Status: {data['payment_status']}")
+    if data["search"]:
+        filter_bits.append(f"Search: \"{data['search']}\"")
+    if filter_bits:
+        elements.append(Paragraph(" &middot; ".join(filter_bits), sub_style))
+    elements.append(Spacer(1, 6 * mm))
+
+    table_rows = [["Date", "Ref No.", "Type", "Description", "Debit", "Credit", "Balance", "Method", "User"]]
+    table_rows.append(["", "", "", "Opening Balance", "", "", data["opening_balance"], "", ""])
+    for t in data["rows"]:
+        table_rows.append(
+            [
+                t["date"], t["reference_no"], t["type"], t["description"],
+                t["debit"] or "", t["credit"] or "", t["balance"],
+                t["payment_method"] or "—", t["user"] or "—",
+            ]
+        )
+    table_rows.append(["", "", "", "Totals", data["total_debit"], data["total_credit"], "", "", ""])
+    table_rows.append(["", "", "", "Closing Balance", "", "", data["closing_balance"], "", ""])
+
+    available_width = page_width - 30 * mm
+    col_widths = [w * available_width for w in (0.09, 0.11, 0.08, 0.30, 0.09, 0.09, 0.10, 0.08, 0.06)]
+
+    ledger_table = Table(table_rows, colWidths=col_widths, repeatRows=1)
+    style_cmds = [
+        ("BACKGROUND", (0, 0), (-1, 0), green),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, -1), 7.5),
+        ("GRID", (0, 0), (-1, -1), 0.4, border),
+        ("ALIGN", (4, 0), (6, -1), "RIGHT"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("FONTNAME", (0, 1), (-1, 1), "Helvetica-Bold"),
+        ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
+        ("FONTNAME", (0, -2), (-1, -2), "Helvetica-Bold"),
+        ("LINEABOVE", (0, -2), (-1, -2), 0.75, dark_green),
+    ]
+    ledger_table.setStyle(TableStyle(style_cmds))
+    elements.append(ledger_table)
+    elements.append(Spacer(1, 14 * mm))
+
+    sig_table = Table(
+        [
+            ["_________________________", "", "_________________________"],
+            ["Prepared by", "", "Authorized by"],
+            ["Name / Date", "", "Name / Date"],
+        ],
+        colWidths=[available_width * 0.4, available_width * 0.2, available_width * 0.4],
+    )
+    sig_table.setStyle(
+        TableStyle(
+            [
+                ("FONTNAME", (0, 1), (-1, 1), "Helvetica-Bold"),
+                ("FONTSIZE", (0, 0), (-1, -1), 9),
+                ("TEXTCOLOR", (0, 1), (-1, -1), muted),
+                ("TOPPADDING", (0, 1), (-1, -1), 2),
+            ]
+        )
+    )
+    elements.append(sig_table)
+
+    doc.build(elements, canvasmaker=NumberedCanvas)
+    buffer.seek(0)
+
+    return send_file(
+        buffer,
+        mimetype="application/pdf",
+        as_attachment=False,
+        download_name=f"statement_{data['date_from']}_to_{data['date_to']}.pdf",
+    )
 
 
 if __name__ == "__main__":

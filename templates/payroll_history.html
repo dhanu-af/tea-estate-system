@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}Payroll History · DKNS Tea Lands{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Payroll History</h1>
+    <p class="subtitle">Every archived, locked pay cycle. Figures here are frozen at the time each cycle was marked as paid.</p>
+  </div>
+  <a class="btn btn-secondary" href="{{ url_for('payroll') }}">Back to Payroll</a>
+</div>
+
+<form method="get" class="search-bar" style="flex-wrap: wrap;">
+  <input type="text" name="q" value="{{ search }}" placeholder="Search by employee name or date">
+  <input type="date" name="from" value="{{ date_from }}">
+  <input type="date" name="to" value="{{ date_to }}">
+  <button class="btn btn-secondary" type="submit">Filter</button>
+  {% if search or date_from or date_to %}
+  <a class="btn btn-secondary" href="{{ url_for('payroll_history') }}">Reset</a>
+  {% endif %}
+</form>
+
+<div class="panel">
+  {% if cycles %}
+  <table>
+    <thead>
+      <tr>
+        <th>Pay Period</th><th>Due Date</th><th>Paid On</th><th>Employees</th>
+        <th>Gross Pay</th><th>Net Pay</th><th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for c in cycles %}
+      <tr>
+        <td>{{ c['cycle_start']|lk_date }} &ndash; {{ c['cycle_end']|lk_date }}</td>
+        <td>{{ c['due_date']|lk_date }}</td>
+        <td>{{ c['paid_at'][:10]|lk_date if c['paid_at'] else '—' }}</td>
+        <td>{{ c['employee_count'] }}</td>
+        <td>{{ c['total_gross_pay'] }}</td>
+        <td>{{ c['total_net_pay'] }}</td>
+        <td style="display:flex; gap:8px;">
+          <a class="btn btn-secondary btn-sm" href="{{ url_for('payroll_cycle_detail', cycle_id=c['id']) }}">View</a>
+          <a class="btn btn-secondary btn-sm" href="{{ url_for('payroll_cycle_pdf', cycle_id=c['id']) }}" target="_blank">PDF</a>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty-state">No paid cycles yet — they'll appear here once you mark a cycle as paid from the Payroll page.</div>
+  {% endif %}
+</div>
+{% endblock %}
