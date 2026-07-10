@@ -17,6 +17,7 @@ WORK_STATUSES = ["Pending", "In Progress", "Completed"]
 EXPENSE_CATEGORIES = ["Fertilizer", "Transport", "Fuel", "Food", "Others"]
 PAYMENT_METHODS = ["Cash", "Cheque", "Bank Transfer"]
 INVOICE_STATUSES = ["Unpaid", "Partially Paid", "Paid"]
+USER_ROLES = ["Admin", "Dhanu Operations"]
 
 # On Vercel there's no writable, persistent local disk for a SQLite file — every
 # serverless invocation gets its own ephemeral filesystem. So in production we
@@ -186,6 +187,8 @@ CREATE TABLE IF NOT EXISTS users (
     id SERIAL PRIMARY KEY,
     username TEXT UNIQUE NOT NULL,
     password_hash TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'Admin',
+    is_active INTEGER NOT NULL DEFAULT 1,
     created_at TEXT DEFAULT (now()::text)
 );
 
@@ -335,6 +338,14 @@ def init_db():
 
     if IS_POSTGRES:
         conn.executescript(_POSTGRES_SCHEMA)
+        # Postgres supports IF NOT EXISTS on ADD COLUMN, so these are safe/idempotent
+        # even against a database that already existed before this feature was added.
+        conn.executescript(
+            """
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'Admin';
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active INTEGER NOT NULL DEFAULT 1;
+            """
+        )
         conn.commit()
         return
 
@@ -412,6 +423,8 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT UNIQUE NOT NULL,
             password_hash TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'Admin',
+            is_active INTEGER NOT NULL DEFAULT 1,
             created_at TEXT DEFAULT (datetime('now'))
         );
 
@@ -509,6 +522,12 @@ def init_db():
     existing_attendance_columns = {row["name"] for row in conn.execute("PRAGMA table_info(attendance)")}
     if "updated_at" not in existing_attendance_columns:
         conn.execute("ALTER TABLE attendance ADD COLUMN updated_at TEXT DEFAULT (datetime('now'))")
+
+    existing_user_columns = {row["name"] for row in conn.execute("PRAGMA table_info(users)")}
+    if "role" not in existing_user_columns:
+        conn.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'Admin'")
+    if "is_active" not in existing_user_columns:
+        conn.execute("ALTER TABLE users ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1")
 
     conn.commit()
     conn.close()

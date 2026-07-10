@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}User Management · DKNS Tea Lands{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>User Management</h1>
+    <p class="subtitle">Create and manage login accounts. "Dhanu Operations" accounts can use Employees, Attendance and Work &amp; Harvest, but not Payroll, Income &amp; Profit, Finance &amp; Factory, or this page.</p>
+  </div>
+  <a class="btn" href="{{ url_for('user_new') }}">Add User</a>
+</div>
+
+<div class="panel">
+  {% if users %}
+  <table>
+    <thead><tr><th>Username</th><th>Role</th><th>Status</th><th>Created</th><th></th></tr></thead>
+    <tbody>
+      {% for u in users %}
+      <tr>
+        <td><a href="{{ url_for('user_edit', user_id=u['id']) }}">{{ u['username'] }}</a>{% if u['id'] == session.get('user_id') %} <small>(you)</small>{% endif %}</td>
+        <td>{{ u['role'] }}</td>
+        <td><span class="badge {{ 'badge-present' if u['is_active'] else 'badge-absent' }}">{{ 'Active' if u['is_active'] else 'Disabled' }}</span></td>
+        <td>{{ u['created_at'] }}</td>
+        <td style="display:flex; gap:8px;">
+          <a class="btn btn-secondary btn-sm" href="{{ url_for('user_edit', user_id=u['id']) }}">Edit</a>
+          {% if u['id'] != session.get('user_id') %}
+          <form method="post" action="{{ url_for('user_toggle_active', user_id=u['id']) }}" onsubmit="return confirm('{{ 'Disable' if u['is_active'] else 'Enable' }} {{ u['username'] }}?');">
+            <button class="btn btn-secondary btn-sm" type="submit">{{ 'Disable' if u['is_active'] else 'Enable' }}</button>
+          </form>
+          <form method="post" action="{{ url_for('user_delete', user_id=u['id']) }}" onsubmit="return confirm('Delete {{ u['username'] }}? This cannot be undone.');">
+            <button class="btn btn-danger btn-sm" type="submit">Delete</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty-state">No users found.</div>
+  {% endif %}
+</div>
+{% endblock %}

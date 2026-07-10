@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Edit' if mode == 'edit' else 'Add' }} User · DKNS Tea Lands{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>{{ 'Edit' if mode == 'edit' else 'Add' }} User</h1>
+  </div>
+</div>
+
+<div class="panel">
+  <form method="post" action="{{ url_for('user_edit', user_id=user_id) if mode == 'edit' else url_for('user_new') }}" class="form-grid">
+    <div class="field">
+      <label>Username</label>
+      <input type="text" name="username" value="{{ user.get('username') or '' }}" required autofocus>
+    </div>
+    <div class="field">
+      <label>Role</label>
+      <select name="role" required>
+        <option value="">Select</option>
+        {% for r in user_roles %}
+        <option value="{{ r }}" {{ 'selected' if user.get('role') == r }}>{{ r }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    {% if mode == 'new' %}
+    <div class="field">
+      <label>Password</label>
+      <input type="password" name="password" required>
+    </div>
+    <div class="field">
+      <label>Confirm Password</label>
+      <input type="password" name="confirm_password" required>
+    </div>
+    {% endif %}
+    <div class="field" style="align-self:end;">
+      <button class="btn" type="submit">{{ 'Save Changes' if mode == 'edit' else 'Add User' }}</button>
+      <a class="btn btn-secondary" href="{{ url_for('user_list') }}">Cancel</a>
+    </div>
+  </form>
+</div>
+
+{% if mode == 'edit' %}
+<div class="panel">
+  <h2>Change Password</h2>
+  <p class="subtitle" style="margin-top:-6px;">Sets a new password for {{ user.get('username') }} immediately.</p>
+  <form method="post" action="{{ url_for('user_change_password', user_id=user_id) }}" class="form-grid" style="margin-top:14px;">
+    <div class="field">
+      <label>New Password</label>
+      <input type="password" name="new_password" required>
+    </div>
+    <div class="field">
+      <label>Confirm New Password</label>
+      <input type="password" name="confirm_new_password" required>
+    </div>
+    <div class="field" style="align-self:end;">
+      <button class="btn" type="submit">Update Password</button>
+    </div>
+  </form>
+</div>
+{% endif %}
+{% endblock %}

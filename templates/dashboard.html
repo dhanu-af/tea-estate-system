@@ -9,7 +9,7 @@
   <a class="btn" href="{{ url_for('income') }}">Set Today's Tea Price &amp; View Profit</a>
 </div>
 
-<div class="cards">
+<div class="cards" id="dashboard-cards" data-live-refresh>
   <div class="card">
     <div class="stat">{{ employee_count }}</div>
     <div class="label">Registered employees</div>
@@ -30,6 +30,11 @@
     <div class="stat">{{ harvest_today }}</div>
     <div class="label">Harvest collected today (kg)</div>
   </div>
+</div>
+
+<div class="panel chart-panel">
+  <h2>7-day trend — harvest &amp; attendance</h2>
+  <canvas id="trendChart" height="90"></canvas>
 </div>
 
 <div class="panel">
@@ -98,4 +103,43 @@
   <div class="empty-state">No work assignments yet. <a href="{{ url_for('work_assignment_new') }}">Create the first one</a>.</div>
   {% endif %}
 </div>
+
+<script>
+  new Chart(document.getElementById('trendChart'), {
+    type: 'bar',
+    data: {
+      labels: {{ trend_labels|tojson }},
+      datasets: [
+        {
+          type: 'bar',
+          label: 'Harvest (kg)',
+          data: {{ trend_harvest|tojson }},
+          backgroundColor: 'rgba(61, 220, 132, 0.55)',
+          borderRadius: 6,
+          yAxisID: 'y'
+        },
+        {
+          type: 'line',
+          label: 'Present',
+          data: {{ trend_present|tojson }},
+          borderColor: '#2dd4bf',
+          backgroundColor: 'rgba(45, 212, 191, 0.15)',
+          tension: 0.35,
+          fill: true,
+          yAxisID: 'y1'
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      interaction: { mode: 'index', intersect: false },
+      scales: {
+        x: { grid: { color: 'rgba(255,255,255,0.06)' }, ticks: { color: '#8ea095' } },
+        y: { position: 'left', grid: { color: 'rgba(255,255,255,0.06)' }, ticks: { color: '#8ea095' }, title: { display: true, text: 'kg', color: '#8ea095' } },
+        y1: { position: 'right', grid: { display: false }, ticks: { color: '#8ea095', stepSize: 1 }, title: { display: true, text: 'employees', color: '#8ea095' } }
+      },
+      plugins: { legend: { labels: { color: '#eef3ef' } } }
+    }
+  });
+</script>
 {% endblock %}

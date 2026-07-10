@@ -34,7 +34,7 @@
   <a class="btn" href="{{ url_for('invoice_list') }}">Invoices</a>
 </div>
 
-<div class="cards">
+<div class="cards" id="finance-cards" data-live-refresh>
   <div class="card">
     <div class="stat">{{ deliveries_count }}</div>
     <div class="label">Deliveries ({{ deliveries_weight }} kg)</div>
@@ -75,6 +75,13 @@
   </div>
 </div>
 
+{% if trend_labels %}
+<div class="panel chart-panel">
+  <h2>Revenue vs. cost trend</h2>
+  <canvas id="financeTrendChart" height="90"></canvas>
+</div>
+{% endif %}
+
 <div class="panel">
   <h2>Recent invoices</h2>
   {% if recent_invoices %}
@@ -98,4 +105,42 @@
   <div class="empty-state">No invoices in this date range yet.</div>
   {% endif %}
 </div>
+
+{% if trend_labels %}
+<script>
+  new Chart(document.getElementById('financeTrendChart'), {
+    type: 'line',
+    data: {
+      labels: {{ trend_labels|tojson }},
+      datasets: [
+        {
+          label: 'Revenue',
+          data: {{ trend_revenue|tojson }},
+          borderColor: '#3ddc84',
+          backgroundColor: 'rgba(61, 220, 132, 0.15)',
+          tension: 0.35,
+          fill: true
+        },
+        {
+          label: 'Cost',
+          data: {{ trend_cost|tojson }},
+          borderColor: '#ff6b6b',
+          backgroundColor: 'rgba(255, 107, 107, 0.1)',
+          tension: 0.35,
+          fill: true
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      interaction: { mode: 'index', intersect: false },
+      scales: {
+        x: { grid: { color: 'rgba(255,255,255,0.06)' }, ticks: { color: '#8ea095' } },
+        y: { grid: { color: 'rgba(255,255,255,0.06)' }, ticks: { color: '#8ea095' } }
+      },
+      plugins: { legend: { labels: { color: '#eef3ef' } } }
+    }
+  });
+</script>
+{% endif %}
 {% endblock %}

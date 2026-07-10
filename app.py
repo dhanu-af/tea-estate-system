@@ -21,6 +21,7 @@ from database import (
     EXPENSE_CATEGORIES,
     PAYMENT_METHODS,
     INVOICE_STATUSES,
+    USER_ROLES,
 )
 from utils import (
     compute_attendance_hours,
@@ -41,6 +42,11 @@ with app.app_context():
 
 PUBLIC_ENDPOINTS = {"checkin", "employee_badge", "login", "setup", "static"}
 
+# Endpoints whose name starts with one of these prefixes are Admin-only — the
+# "Dhanu Operations" role can use everything else (Dashboard, Employees,
+# Attendance, Work & Harvest) but is redirected away from these.
+ADMIN_ONLY_PREFIXES = ("payroll", "income", "finance", "factory", "delivery", "invoice", "user")
+
 
 @app.before_request
 def require_login():
@@ -54,6 +60,19 @@ def require_login():
         return redirect(url_for("setup"))
     if not session.get("user_id"):
         return redirect(url_for("login"))
+
+    # Re-check the account fresh from the DB (not just at login) so disabling a
+    # user takes effect immediately, even if they already have a live session.
+    user = conn.execute("SELECT * FROM users WHERE id = ?", (session["user_id"],)).fetchone()
+    if not user or not user["is_active"]:
+        session.clear()
+        flash("This account has been disabled. Contact your administrator.", "error")
+        return redirect(url_for("login"))
+    session["role"] = user["role"]
+
+    if user["role"] != "Admin" and request.endpoint.startswith(ADMIN_ONLY_PREFIXES):
+        flash("Your account doesn't have access to that section.", "error")
+        return redirect(url_for("dashboard"))
 
 EMPLOYEE_FIELDS = [
     "full_name",
@@ -92,6 +111,7 @@ def inject_lookups():
         expense_categories=EXPENSE_CATEGORIES,
         payment_methods=PAYMENT_METHODS,
         invoice_statuses=INVOICE_STATUSES,
+        user_roles=USER_ROLES,
     )
 
 
@@ -130,6 +150,22 @@ def dashboard():
            ORDER BY w.id DESC LIMIT 5"""
     ).fetchall()
 
+    from datetime import timedelta
+
+    anchor = date.fromisoformat(today)
+    trend_labels, trend_harvest, trend_present = [], [], []
+    for i in range(6, -1, -1):
+        d = (anchor - timedelta(days=i)).isoformat()
+        trend_labels.append(d[5:])  # MM-DD, keeps the chart x-axis compact
+        h = conn.execute(
+            "SELECT COALESCE(SUM(actual_output), 0) AS total FROM work_assignments WHERE date = ?", (d,)
+        ).fetchone()["total"]
+        trend_harvest.append(round(h, 2))
+        p = conn.execute(
+            "SELECT COUNT(*) AS c FROM attendance WHERE date = ? AND status = 'Present'", (d,)
+        ).fetchone()["c"]
+        trend_present.append(p)
+
     return render_template(
         "dashboard.html",
         employee_count=employee_count,
@@ -140,6 +176,9 @@ def dashboard():
         recent_attendance=recent_attendance,
         harvest_today=harvest_today,
         recent_assignments=recent_assignments,
+        trend_labels=trend_labels,
+        trend_harvest=trend_harvest,
+        trend_present=trend_present,
     )
 
 
@@ -167,7 +206,7 @@ def setup():
 
         try:
             conn.execute(
-                "INSERT INTO users (username, password_hash) VALUES (?, ?)",
+                "INSERT INTO users (username, password_hash, role, is_active) VALUES (?, ?, 'Admin', 1)",
                 (username, generate_password_hash(password)),
             )
             conn.commit()
@@ -194,8 +233,12 @@ def login():
         user = conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
 
         if user and check_password_hash(user["password_hash"], password):
+            if not user["is_active"]:
+                flash("This account has been disabled. Contact your administrator.", "error")
+                return render_template("login.html")
             session["user_id"] = user["id"]
             session["username"] = user["username"]
+            session["role"] = user["role"]
             flash(f"Welcome, {user['username']}.", "success")
             return redirect(url_for("dashboard"))
 
@@ -210,6 +253,172 @@ def logout():
     session.clear()
     flash("Logged out.", "success")
     return redirect(url_for("login"))
+
+
+# ---------- User Management ----------
+
+
+def _active_admin_count(conn, exclude_id=None):
+    if exclude_id is None:
+        return conn.execute("SELECT COUNT(*) AS c FROM users WHERE role = 'Admin' AND is_active = 1").fetchone()["c"]
+    return conn.execute(
+        "SELECT COUNT(*) AS c FROM users WHERE role = 'Admin' AND is_active = 1 AND id != ?", (exclude_id,)
+    ).fetchone()["c"]
+
+
+@app.route("/users")
+def user_list():
+    conn = get_connection()
+    users = conn.execute("SELECT * FROM users ORDER BY username").fetchall()
+    return render_template("users.html", users=users)
+
+
+@app.route("/users/new", methods=["GET", "POST"])
+def user_new():
+    if request.method == "POST":
+        username = request.form.get("username", "").strip()
+        password = request.form.get("password", "")
+        confirm_password = request.form.get("confirm_password", "")
+        role = request.form.get("role", "").strip()
+
+        if not username or not password:
+            flash("Username and password are required.", "error")
+            return render_template("user_form.html", user=request.form, mode="new")
+        if password != confirm_password:
+            flash("Passwords do not match.", "error")
+            return render_template("user_form.html", user=request.form, mode="new")
+        if role not in USER_ROLES:
+            flash("Select a valid role.", "error")
+            return render_template("user_form.html", user=request.form, mode="new")
+
+        conn = get_connection()
+        try:
+            conn.execute(
+                "INSERT INTO users (username, password_hash, role, is_active) VALUES (?, ?, ?, 1)",
+                (username, generate_password_hash(password), role),
+            )
+            conn.commit()
+        except IntegrityError:
+            flash("That username is already taken.", "error")
+            return render_template("user_form.html", user=request.form, mode="new")
+
+        flash(f"User {username} created.", "success")
+        return redirect(url_for("user_list"))
+
+    return render_template("user_form.html", user={}, mode="new")
+
+
+@app.route("/users/<int:user_id>/edit", methods=["GET", "POST"])
+def user_edit(user_id):
+    conn = get_connection()
+    user = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+    if not user:
+        flash("User not found.", "error")
+        return redirect(url_for("user_list"))
+
+    if request.method == "POST":
+        username = request.form.get("username", "").strip()
+        role = request.form.get("role", "").strip()
+
+        if not username:
+            flash("Username is required.", "error")
+            merged = dict(user)
+            merged.update(request.form)
+            return render_template("user_form.html", user=merged, mode="edit", user_id=user_id)
+        if role not in USER_ROLES:
+            flash("Select a valid role.", "error")
+            merged = dict(user)
+            merged.update(request.form)
+            return render_template("user_form.html", user=merged, mode="edit", user_id=user_id)
+
+        if user["role"] == "Admin" and role != "Admin" and _active_admin_count(conn, exclude_id=user_id) == 0:
+            flash("Can't change this account's role — it's the last active Admin.", "error")
+            return redirect(url_for("user_list"))
+
+        try:
+            conn.execute("UPDATE users SET username = ?, role = ? WHERE id = ?", (username, role, user_id))
+            conn.commit()
+        except IntegrityError:
+            flash("That username is already taken.", "error")
+            merged = dict(user)
+            merged.update(request.form)
+            return render_template("user_form.html", user=merged, mode="edit", user_id=user_id)
+
+        flash("User updated.", "success")
+        return redirect(url_for("user_list"))
+
+    return render_template("user_form.html", user=dict(user), mode="edit", user_id=user_id)
+
+
+@app.route("/users/<int:user_id>/password", methods=["POST"])
+def user_change_password(user_id):
+    conn = get_connection()
+    user = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+    if not user:
+        flash("User not found.", "error")
+        return redirect(url_for("user_list"))
+
+    new_password = request.form.get("new_password", "")
+    confirm_new_password = request.form.get("confirm_new_password", "")
+
+    if not new_password:
+        flash("Enter a new password.", "error")
+        return redirect(url_for("user_edit", user_id=user_id))
+    if new_password != confirm_new_password:
+        flash("Passwords do not match.", "error")
+        return redirect(url_for("user_edit", user_id=user_id))
+
+    conn.execute(
+        "UPDATE users SET password_hash = ? WHERE id = ?", (generate_password_hash(new_password), user_id)
+    )
+    conn.commit()
+    flash(f"Password updated for {user['username']}.", "success")
+    return redirect(url_for("user_edit", user_id=user_id))
+
+
+@app.route("/users/<int:user_id>/toggle", methods=["POST"])
+def user_toggle_active(user_id):
+    conn = get_connection()
+    user = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+    if not user:
+        flash("User not found.", "error")
+        return redirect(url_for("user_list"))
+
+    if user_id == session.get("user_id"):
+        flash("You can't disable your own account. Ask another admin to do it.", "error")
+        return redirect(url_for("user_list"))
+
+    if user["is_active"] and user["role"] == "Admin" and _active_admin_count(conn, exclude_id=user_id) == 0:
+        flash("Can't disable the last active Admin account.", "error")
+        return redirect(url_for("user_list"))
+
+    new_status = 0 if user["is_active"] else 1
+    conn.execute("UPDATE users SET is_active = ? WHERE id = ?", (new_status, user_id))
+    conn.commit()
+    flash(f"{user['username']} {'enabled' if new_status else 'disabled'}.", "success")
+    return redirect(url_for("user_list"))
+
+
+@app.route("/users/<int:user_id>/delete", methods=["POST"])
+def user_delete(user_id):
+    conn = get_connection()
+    user = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+    if not user:
+        flash("User not found.", "error")
+        return redirect(url_for("user_list"))
+
+    if user_id == session.get("user_id"):
+        flash("You can't delete your own account while logged in.", "error")
+        return redirect(url_for("user_list"))
+
+    if user["role"] == "Admin" and user["is_active"] and _active_admin_count(conn, exclude_id=user_id) == 0:
+        flash("Can't delete the last active Admin account.", "error")
+        return redirect(url_for("user_list"))
+
+    conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+    conn.commit()
+    flash(f"User {user['username']} removed.", "success")
+    return redirect(url_for("user_list"))
 
 
 # ---------- Employees ----------
@@ -1285,6 +1494,28 @@ def finance_dashboard():
         (date_from, date_to),
     ).fetchall()
 
+    from datetime import date, timedelta
+
+    span_start = date.fromisoformat(date_from)
+    span_end = date.fromisoformat(date_to)
+    span_days = (span_end - span_start).days + 1
+
+    trend_labels, trend_revenue, trend_cost = [], [], []
+    if 0 < span_days <= 62:
+        for i in range(span_days):
+            d = (span_start + timedelta(days=i)).isoformat()
+            trend_labels.append(d[5:])  # MM-DD
+            rev = conn.execute(
+                "SELECT COALESCE(SUM(total_amount), 0) AS total FROM invoices WHERE invoice_date = ?", (d,)
+            ).fetchone()["total"]
+            trend_revenue.append(round(rev, 2))
+            day_expense = conn.execute(
+                "SELECT COALESCE(SUM(amount), 0) AS total FROM expenses WHERE date = ?", (d,)
+            ).fetchone()["total"]
+            day_payroll_rows = _compute_payroll_rows(d, d)
+            day_payroll = sum(r["true_labor_cost"] for r in day_payroll_rows if r["true_labor_cost"]) or 0
+            trend_cost.append(round(day_expense + day_payroll, 2))
+
     return render_template(
         "finance_dashboard.html",
         view=view,
@@ -1302,6 +1533,9 @@ def finance_dashboard():
         total_cost=total_cost,
         net_profit=net_profit,
         recent_invoices=recent_invoices,
+        trend_labels=trend_labels,
+        trend_revenue=trend_revenue,
+        trend_cost=trend_cost,
     )
 
 
