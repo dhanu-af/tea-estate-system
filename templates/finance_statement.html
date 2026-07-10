@@ -4,7 +4,7 @@
 <div class="page-header">
   <div>
     <h1>Finance &amp; Factory Statement</h1>
-    <p class="subtitle">A chronological ledger of every income, expense, payroll cost, salary advance, delivery, invoice, and factory payment — like a bank statement for the estate.</p>
+    <p class="subtitle">A chronological ledger of every factory payment received, expense, processed payroll cost, salary advance, delivery, and invoice — like a bank statement for the estate. Revenue counts only when a factory payment is actually received, and payroll only once a pay cycle is marked Paid.</p>
   </div>
   <div style="display:flex; gap:8px;">
     <a class="btn btn-secondary" href="{{ url_for('finance_statement_csv', **request.args) }}">Export CSV</a>

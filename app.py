@@ -2726,120 +2726,67 @@ def invoice_delete_payment(invoice_id, payment_id):
 
 # ---------- Finance & Factory Statement (unified ledger) ----------
 
-TRANSACTION_TYPES = ["Income", "Expense", "Payroll", "Salary Advance", "Delivery", "Invoice", "Factory Payment"]
+TRANSACTION_TYPES = ["Expense", "Payroll", "Salary Advance", "Delivery", "Invoice", "Factory Payment"]
 
 
 def _build_payroll_ledger_entries(conn):
-    """One Payroll debit entry per employee per day worked, so the ledger can be
-    filtered by employee and matches the true_labor_cost figure used elsewhere
-    (Income & Profit, Finance dashboard) — harvest + hourly pay, plus the
-    employer's own EPF/ETF contribution on top (a real cash cost either way,
-    whether it ends up as the employee's net pay or paid into the EPF/ETF fund
-    on their behalf)."""
+    """One Payroll debit entry per employee per processed pay cycle. Sourced
+    from the frozen payroll_transactions snapshot rather than computed live,
+    so payroll only becomes a real ledger expense once a cycle has actually
+    been marked Paid on its weekly Monday pay date — a still-in-progress,
+    unpaid cycle isn't a committed cost yet and doesn't appear here at all."""
     entries = []
-    employees = conn.execute(
-        """SELECT id, employee_number, full_name, rate_per_kg, hourly_rate,
-                  over_target_commission_percent, epf_etf_applicable
-           FROM employees"""
+    rows = conn.execute(
+        """SELECT t.* FROM payroll_transactions t
+           JOIN payroll_cycles c ON c.id = t.cycle_id
+           ORDER BY t.payment_date"""
     ).fetchall()
 
-    for e in employees:
-        assignments = conn.execute(
-            "SELECT date, actual_output, harvest_target FROM work_assignments WHERE employee_id = ?", (e["id"],)
-        ).fetchall()
-        attendance = conn.execute(
-            "SELECT date, total_work_hours FROM attendance WHERE employee_id = ?", (e["id"],)
-        ).fetchall()
+    for t in rows:
+        true_cost = round((t["total_pay"] or 0) + (t["employer_epf"] or 0) + (t["employer_etf"] or 0), 2)
+        if true_cost <= 0 or not t["payment_date"]:
+            continue  # no date to place it on the timeline (e.g. cleared during a payment correction)
 
-        harvest_pay_by_date, kg_by_date, hours_by_date = {}, {}, {}
-        for a in assignments:
-            kg_by_date[a["date"]] = kg_by_date.get(a["date"], 0) + (a["actual_output"] or 0)
-            if e["rate_per_kg"]:
-                pay = compute_harvest_pay(
-                    a["actual_output"] or 0, a["harvest_target"], e["rate_per_kg"], e["over_target_commission_percent"]
-                )
-                harvest_pay_by_date[a["date"]] = harvest_pay_by_date.get(a["date"], 0) + pay["total_pay"]
-        for a in attendance:
-            hours_by_date[a["date"]] = hours_by_date.get(a["date"], 0) + (a["total_work_hours"] or 0)
+        note = ""
+        if t["employer_epf"] or t["employer_etf"]:
+            note = f" (incl. employer EPF/ETF {round((t['employer_epf'] or 0) + (t['employer_etf'] or 0), 2)})"
 
-        for d in set(harvest_pay_by_date) | set(hours_by_date):
-            harvest_pay = round(harvest_pay_by_date.get(d, 0), 2)
-            hourly_pay = round(hours_by_date.get(d, 0) * e["hourly_rate"], 2) if e["hourly_rate"] else 0
-            total_pay = round(harvest_pay + hourly_pay, 2)
-            if total_pay <= 0:
-                continue
-
-            epf_etf = compute_epf_etf(total_pay, e["epf_etf_applicable"])
-            true_cost = round(total_pay + epf_etf["employer_epf"] + epf_etf["employer_etf"], 2)
-
-            detail_parts = []
-            if kg_by_date.get(d):
-                detail_parts.append(f"{round(kg_by_date[d], 2)} kg harvest")
-            if hours_by_date.get(d):
-                detail_parts.append(f"{round(hours_by_date[d], 2)} h")
-            detail = " + ".join(detail_parts) if detail_parts else "pay"
-
-            note = ""
-            if e["epf_etf_applicable"]:
-                note = (
-                    f" (incl. employee EPF deduction {epf_etf['employee_epf']}, "
-                    f"employer EPF/ETF {round(epf_etf['employer_epf'] + epf_etf['employer_etf'], 2)})"
-                )
-
-            entries.append(
-                {
-                    "date": d,
-                    "type": "Payroll",
-                    "reference_no": f"PAY-{e['id']}-{d}",
-                    "description": f"Payroll — {e['full_name']} ({e['employee_number']}): {detail}{note}",
-                    "debit": true_cost,
-                    "credit": 0,
-                    "payment_method": None,
-                    "user": None,
-                    "factory": None,
-                    "factory_id": None,
-                    "employee": e["full_name"],
-                    "employee_id": e["id"],
-                    "status": None,
-                }
-            )
+        entries.append(
+            {
+                "date": t["payment_date"],
+                "type": "Payroll",
+                "reference_no": f"PAY-{t['id']}",
+                "description": f"Payroll — {t['full_name']} ({t['employee_number']}): cycle processed{note}",
+                "debit": true_cost,
+                "credit": 0,
+                "payment_method": t["payment_method"],
+                "user": None,
+                "factory": None,
+                "factory_id": None,
+                "employee": t["full_name"],
+                "employee_id": t["employee_id"],
+                "status": t["payment_status"],
+            }
+        )
     return entries
 
 
 def _build_ledger(conn):
-    """Normalizes every financial event across the app (accrued daily tea income,
-    expenses, payroll cost, salary advances, factory deliveries, invoices, and
-    invoice payments) into one common transaction shape, sorted chronologically.
-    This is computed on the fly from the existing source tables rather than
-    stored in its own table, so it can never drift out of sync with them."""
+    """Normalizes every financial event across the app (expenses, payroll cost,
+    salary advances, factory deliveries, invoices, and invoice payments) into
+    one common transaction shape, sorted chronologically. This is computed on
+    the fly from the existing source tables rather than stored in its own
+    table, so it can never drift out of sync with them.
+
+    Revenue is recognized only when a factory *payment* is actually received
+    (not when tea is harvested or an invoice is merely raised) — accrued daily
+    harvest income was deliberately removed, since it isn't real cash until the
+    factory pays the invoice. Payroll cost is likewise only recognized once a
+    pay cycle has been processed and marked Paid (see _build_payroll_ledger_entries)
+    — an unpaid, still-in-progress cycle isn't a committed expense yet."""
     usernames = {u["id"]: u["username"] for u in conn.execute("SELECT id, username FROM users").fetchall()}
 
     entries = []
-
-    for r in conn.execute(
-        """SELECT w.date AS date, SUM(w.actual_output) AS kg, dp.price_per_kg AS price, dp.created_by AS created_by
-           FROM work_assignments w JOIN daily_prices dp ON dp.date = w.date
-           GROUP BY w.date, dp.price_per_kg, dp.created_by
-           HAVING SUM(w.actual_output) > 0"""
-    ).fetchall():
-        kg = round(r["kg"], 2)
-        entries.append(
-            {
-                "date": r["date"],
-                "type": "Income",
-                "reference_no": f"INC-{r['date']}",
-                "description": f"Tea income — {kg} kg harvested @ {r['price']}/kg",
-                "debit": 0,
-                "credit": round(kg * r["price"], 2),
-                "payment_method": None,
-                "user": usernames.get(r["created_by"]),
-                "factory": None,
-                "factory_id": None,
-                "employee": None,
-                "employee_id": None,
-                "status": None,
-            }
-        )
 
     for r in conn.execute("SELECT * FROM expenses").fetchall():
         desc = r["category"]
