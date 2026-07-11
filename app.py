@@ -244,6 +244,26 @@ def dashboard():
         "SELECT COALESCE(SUM(actual_output), 0) AS total FROM work_assignments WHERE date = ?",
         (today,),
     ).fetchone()["total"]
+
+    kpi_today_row = conn.execute(
+        """SELECT COALESCE(SUM(harvest_target), 0) AS target, COALESCE(SUM(actual_output), 0) AS actual
+           FROM work_assignments WHERE date = ?""",
+        (today,),
+    ).fetchone()
+    kpi_today_target = round(kpi_today_row["target"], 2)
+    kpi_today_actual = round(kpi_today_row["actual"], 2)
+    kpi_today_percent = round(kpi_today_actual / kpi_today_target * 100, 1) if kpi_today_target else None
+
+    week_monday, week_sunday = _week_bounds(date.fromisoformat(today))
+    kpi_week_row = conn.execute(
+        """SELECT COALESCE(SUM(harvest_target), 0) AS target, COALESCE(SUM(actual_output), 0) AS actual
+           FROM work_assignments WHERE date BETWEEN ? AND ?""",
+        (week_monday.isoformat(), week_sunday.isoformat()),
+    ).fetchone()
+    kpi_week_target = round(kpi_week_row["target"], 2)
+    kpi_week_actual = round(kpi_week_row["actual"], 2)
+    kpi_week_percent = round(kpi_week_actual / kpi_week_target * 100, 1) if kpi_week_target else None
+
     recent_assignments = conn.execute(
         """SELECT w.*, e.full_name, e.employee_number FROM work_assignments w
            JOIN employees e ON e.id = w.employee_id
@@ -292,6 +312,12 @@ def dashboard():
         weather=weather,
         upcoming_birthdays=upcoming_birthdays,
         announcements=announcements,
+        kpi_today_target=kpi_today_target,
+        kpi_today_actual=kpi_today_actual,
+        kpi_today_percent=kpi_today_percent,
+        kpi_week_target=kpi_week_target,
+        kpi_week_actual=kpi_week_actual,
+        kpi_week_percent=kpi_week_percent,
     )
 
 
@@ -2652,6 +2678,11 @@ def finance_dashboard():
         (date_from, date_to),
     ).fetchone()
 
+    harvest_collected = conn.execute(
+        "SELECT COALESCE(SUM(actual_output), 0) AS total FROM work_assignments WHERE date BETWEEN ? AND ?",
+        (date_from, date_to),
+    ).fetchone()["total"]
+
     expense_total = conn.execute(
         "SELECT COALESCE(SUM(amount), 0) AS total FROM expenses WHERE date BETWEEN ? AND ?", (date_from, date_to)
     ).fetchone()["total"]
@@ -2702,6 +2733,8 @@ def finance_dashboard():
         outstanding_receivables=round(outstanding_receivables, 2),
         deliveries_count=deliveries_row["c"],
         deliveries_weight=round(deliveries_row["weight"], 2),
+        harvest_collected=round(harvest_collected, 2),
+        awaiting_delivery=round(harvest_collected - deliveries_row["weight"], 2),
         expense_total=round(expense_total, 2),
         payroll_cost=round(payroll_cost, 2),
         total_cost=total_cost,

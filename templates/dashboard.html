@@ -32,6 +32,24 @@
   </div>
 </div>
 
+<div class="panel" id="kpi-cards" data-live-refresh>
+  <h2>🎯 Total KPI (Harvest Target vs Actual)</h2>
+  <div class="cards" style="margin-top:12px; margin-bottom:0;">
+    <div class="card">
+      <div class="stat" style="color: {{ 'var(--success)' if kpi_today_percent is not none and kpi_today_percent >= 100 else 'var(--warning)' if kpi_today_percent is not none else 'var(--muted)' }};">
+        {{ (kpi_today_percent|string ~ '%') if kpi_today_percent is not none else '—' }}
+      </div>
+      <div class="label">Today's KPI &middot; {{ kpi_today_actual }} / {{ kpi_today_target }} kg</div>
+    </div>
+    <div class="card">
+      <div class="stat" style="color: {{ 'var(--success)' if kpi_week_percent is not none and kpi_week_percent >= 100 else 'var(--warning)' if kpi_week_percent is not none else 'var(--muted)' }};">
+        {{ (kpi_week_percent|string ~ '%') if kpi_week_percent is not none else '—' }}
+      </div>
+      <div class="label">This Week's KPI &middot; {{ kpi_week_actual }} / {{ kpi_week_target }} kg</div>
+    </div>
+  </div>
+</div>
+
 {% if session.get('role') == 'Admin' %}
 <div class="panel">
   <h2>📢 Post Announcement</h2>

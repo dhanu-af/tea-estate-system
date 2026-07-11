@@ -186,6 +186,30 @@ def test_finance_dashboard_shows_revenue_cost_and_profit(auth_client):
     assert b"6000.0" in resp.data
 
 
+def test_finance_dashboard_shows_harvest_collected_and_awaiting_delivery(auth_client):
+    auth_client.post("/finance/factories/new", data={"name": "Greenfield Factory"})
+    auth_client.post("/employees/new", data={"full_name": "Alice"})
+    auth_client.post(
+        "/work-assignments/new",
+        data={"employee_id": "1", "date": "2026-07-10", "task_type": "Plucking", "harvest_target": "20"},
+    )
+    auth_client.post("/work-assignments/1/weigh", data={"gross_weight": "30", "tare_weight": "0"})
+    # harvest collected = 30kg total
+
+    auth_client.post(
+        "/finance/deliveries/new",
+        data={"delivery_date": "2026-07-10", "factory_id": "1", "factory_weight": "18"},
+    )
+    # 18kg delivered so far, 12kg still awaiting delivery to the factory
+
+    resp = auth_client.get("/finance?view=daily&date=2026-07-10")
+    text = resp.get_data(as_text=True)
+    assert "Harvest collected" in text
+    assert "30.0" in text
+    assert "Harvest awaiting delivery" in text
+    assert "12.0" in text
+
+
 def test_finance_dashboard_handles_no_data(auth_client):
     resp = auth_client.get("/finance?view=daily&date=2026-07-10")
     assert resp.status_code == 200

@@ -38,8 +38,16 @@
 
 <div class="cards" id="finance-cards" data-live-refresh>
   <div class="card">
+    <div class="stat">{{ harvest_collected }}</div>
+    <div class="label">Harvest collected (kg)</div>
+  </div>
+  <div class="card">
     <div class="stat">{{ deliveries_count }}</div>
     <div class="label">Deliveries ({{ deliveries_weight }} kg)</div>
+  </div>
+  <div class="card">
+    <div class="stat" style="color: {{ 'var(--warning)' if awaiting_delivery > 0 else 'var(--muted)' }};">{{ awaiting_delivery }}</div>
+    <div class="label">Harvest awaiting delivery (kg)</div>
   </div>
   <div class="card">
     <div class="stat">{{ total_invoiced_weight }}</div>
