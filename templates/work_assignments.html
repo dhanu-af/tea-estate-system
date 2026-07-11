@@ -9,6 +9,25 @@
   <a class="btn" href="{{ url_for('work_assignment_new') }}">+ New Assignment</a>
 </div>
 
+{% if needs_assignment %}
+<div class="panel" style="border-color: var(--tea-green);">
+  <h2>🕒 Checked In, Awaiting Work Assignment</h2>
+  <p class="subtitle" style="margin-top:-6px;">These employees checked in today ({{ today|lk_date }}) but don't have a task assigned yet.</p>
+  <table>
+    <thead><tr><th>Employee</th><th>Check-in</th><th></th></tr></thead>
+    <tbody>
+      {% for e in needs_assignment %}
+      <tr>
+        <td>{{ e['full_name'] }} <small>({{ e['employee_number'] }})</small></td>
+        <td>{{ e['check_in'] or '—' }}</td>
+        <td><a class="btn btn-sm" href="{{ url_for('work_assignment_new', employee_id=e['id'], date=today) }}">+ Assign Work</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
 <form class="search-bar" method="get">
   <input type="date" name="date" value="{{ date_filter }}">
   <button class="btn btn-secondary" type="submit">Filter</button>

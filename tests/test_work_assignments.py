@@ -142,3 +142,50 @@ def test_commission_flows_into_payroll_total(auth_client):
     resp = auth_client.get("/payroll?from=2026-07-01&to=2026-07-10")
     assert b"1490.0" in resp.data
     assert b"4.0" in resp.data  # bonus kg column
+
+
+def test_checked_in_employee_without_assignment_is_flagged(auth_client):
+    auth_client.post("/employees/new", data={"full_name": "Kamal Perera"})
+    auth_client.get("/checkin/EMP-0001")
+
+    resp = auth_client.get("/work-assignments")
+    assert b"Awaiting Work Assignment" in resp.data
+    assert b"Kamal Perera" in resp.data
+
+
+def test_assign_work_link_prefills_employee_and_today(auth_client):
+    import app as app_module
+
+    auth_client.post("/employees/new", data={"full_name": "Kamal Perera"})
+    auth_client.get("/checkin/EMP-0001")
+    today = app_module._colombo_today().isoformat()
+
+    resp = auth_client.get(f"/work-assignments/new?employee_id=1&date={today}")
+    text = resp.get_data(as_text=True)
+    assert f'value="1" selected' in text
+    assert f'value="{today}"' in text
+
+
+def test_creating_assignment_clears_the_awaiting_flag(auth_client):
+    auth_client.post("/employees/new", data={"full_name": "Kamal Perera"})
+    auth_client.get("/checkin/EMP-0001")
+
+    import app as app_module
+
+    today = app_module._colombo_today().isoformat()
+    auth_client.post(
+        "/work-assignments/new",
+        data={"employee_id": "1", "date": today, "task_type": "Plucking", "harvest_target": "20"},
+    )
+
+    resp = auth_client.get("/work-assignments")
+    assert b"Awaiting Work Assignment" not in resp.data
+
+
+def test_new_assignment_form_defaults_date_to_today_when_no_query_param(auth_client):
+    import app as app_module
+
+    auth_client.post("/employees/new", data={"full_name": "Kamal Perera"})
+    today = app_module._colombo_today().isoformat()
+    resp = auth_client.get("/work-assignments/new")
+    assert f'value="{today}"'.encode() in resp.data

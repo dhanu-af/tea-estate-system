@@ -1051,7 +1051,26 @@ def work_assignment_list():
         params.append(date_filter)
     query += " ORDER BY w.date DESC, w.id DESC"
     rows = conn.execute(query, params).fetchall()
-    return render_template("work_assignments.html", assignments=rows, date_filter=date_filter)
+
+    today = _colombo_today().isoformat()
+    needs_assignment = conn.execute(
+        """SELECT e.id, e.full_name, e.employee_number, a.check_in FROM attendance a
+           JOIN employees e ON e.id = a.employee_id
+           WHERE a.date = ? AND a.status = 'Present'
+             AND NOT EXISTS (
+                 SELECT 1 FROM work_assignments w WHERE w.employee_id = a.employee_id AND w.date = ?
+             )
+           ORDER BY a.check_in""",
+        (today, today),
+    ).fetchall()
+
+    return render_template(
+        "work_assignments.html",
+        assignments=rows,
+        date_filter=date_filter,
+        needs_assignment=needs_assignment,
+        today=today,
+    )
 
 
 @app.route("/work-assignments/new", methods=["GET", "POST"])
@@ -1079,7 +1098,11 @@ def work_assignment_new():
         flash("Work assignment created.", "success")
         return redirect(url_for("work_assignment_list"))
 
-    return render_template("work_assignment_form.html", employees=employees, assignment={})
+    prefill = {
+        "employee_id": request.args.get("employee_id", ""),
+        "date": request.args.get("date", "") or _colombo_today().isoformat(),
+    }
+    return render_template("work_assignment_form.html", employees=employees, assignment=prefill)
 
 
 @app.route("/work-assignments/<int:assignment_id>")
