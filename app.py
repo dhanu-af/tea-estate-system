@@ -64,8 +64,17 @@ def _now_text():
 
 # Create tables on cold start. Safe to call repeatedly (CREATE TABLE IF NOT EXISTS) —
 # needed because on Vercel this module is only ever imported, never run as __main__.
-with app.app_context():
-    init_db()
+# Wrapped in try/except so a database that's temporarily unreachable (e.g. Postgres
+# not yet connected on a fresh Vercel project) fails each *request* with a clear,
+# per-route error instead of crashing the entire module import — which previously
+# took down every route, including ones that don't touch the database at all.
+try:
+    with app.app_context():
+        init_db()
+except Exception:
+    import logging
+
+    logging.exception("Database initialization failed at startup — check DATABASE_URL/POSTGRES_URL.")
 
 PUBLIC_ENDPOINTS = {"checkin", "employee_badge", "login", "setup", "static"}
 
