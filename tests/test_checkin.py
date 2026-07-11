@@ -39,3 +39,19 @@ def test_checkin_shows_todays_task(auth_client):
     )
     resp = auth_client.get("/checkin/EMP-0001")
     assert b"Plucking" in resp.data
+
+
+def test_checkin_shows_daily_sinhala_instructions_only_on_check_in(auth_client):
+    auth_client.post("/employees/new", data={"full_name": "Shayamali Kanthi"})
+
+    resp = auth_client.get("/checkin/EMP-0001")
+    text = resp.get_data(as_text=True)
+    assert "දෛනික කාර්යයන්" in text
+
+    resp = auth_client.get("/checkin/EMP-0001")
+    text = resp.get_data(as_text=True)
+    assert "දෛනික කාර්යයන්" not in text  # not shown again on check-out
+
+    resp = auth_client.get("/checkin/EMP-0001")
+    text = resp.get_data(as_text=True)
+    assert "දෛනික කාර්යයන්" not in text  # not shown on "already checked out"

@@ -23,6 +23,11 @@
     .kiosk-detail { text-align: left; background: var(--tea-green-light); border-radius: var(--radius); padding: 14px 16px; margin-top: 16px; }
     .kiosk-detail div { display: flex; justify-content: space-between; padding: 4px 0; font-size: 0.9rem; }
     .kiosk-detail div span:first-child { color: var(--muted); }
+    .kiosk-notice { text-align: left; background: var(--card); border: 1px solid var(--tea-green); border-radius: var(--radius); padding: 18px 20px; margin-top: 18px; font-size: 0.92rem; line-height: 1.6; }
+    .kiosk-notice h2 { font-size: 1rem; margin: 0 0 10px; }
+    .kiosk-notice ol, .kiosk-notice ul { margin: 8px 0; padding-left: 22px; }
+    .kiosk-notice li { margin-bottom: 6px; }
+    .kiosk-notice p { margin: 8px 0; }
   </style>
 </head>
 <body>
@@ -57,6 +62,33 @@
         <div><span>Target</span><span>{{ todays_task['harvest_target'] if todays_task['harvest_target'] is not none else '—' }} kg</span></div>
         {% endif %}
       </div>
+
+      {% if action == 'checked_in' %}
+      <div class="kiosk-notice" lang="si">
+        <h2>🌿 අද දින තේ දළු නෙළීමේ දෛනික කාර්යයන්</h2>
+        <p><strong>සුභ උදෑසනක්!</strong></p>
+        <p>අද දින කරුණාකර පහත උපදෙස් අනුව කාර්යයන් ඉටු කරන්න.</p>
+        <ol>
+          <li>⏰ නියමිත වේලාවට සේවයට වාර්තා වී පැමිණීම ලියාපදිංචි කරන්න.</li>
+          <li>🌱 නියමිත කොටසෙහි පමණක් තේ දළු නෙළීම සිදු කරන්න.</li>
+          <li>🍃 <strong>"දළු දෙකයි කොළයක්"</strong> ප්‍රමිතියට අනුව පමණක් දළු නෙළන්න.</li>
+          <li>❌ පරණ, තද, කහ වූ හෝ හානි වූ කොළ නෙළීමෙන් වළකින්න.</li>
+          <li>🧺 නෙළන ලද දළු පිරිසිදුව තබා අනවශ්‍ය ද්‍රව්‍ය මිශ්‍ර නොකරන්න.</li>
+          <li>⚖️ නියමිත බර ඉලක්කය (KPI) ලබා ගැනීමට උත්සාහ කරන්න.</li>
+          <li>🚶‍♀️ වැඩ කරන කාලය තුළ අනවශ්‍ය ලෙස වැඩබිමෙන් පිටත නොයන්න.</li>
+          <li>💧 ප්‍රමාණවත් ලෙස ජලය පානය කර ආරක්ෂිතව වැඩ කරන්න.</li>
+          <li>🤝 කණ්ඩායම් නායකගේ උපදෙස් අනුගමනය කර ගුණාත්මකභාවය පවත්වා ගන්න.</li>
+          <li>📢 කිසියම් ගැටලුවක්, අසනීප තත්ත්වයක් හෝ හදිසි අවශ්‍යතාවයක් ඇති වුවහොත් වහාම ඔබගේ අධීක්ෂකවරයා දැනුවත් කරන්න.</li>
+        </ol>
+        <p><strong>🎯 අද දින ඉලක්කය:</strong></p>
+        <ul>
+          <li>ගුණාත්මක තේ දළු නෙළීම.</li>
+          <li>නියමිත දෛනික ඉලක්කය සපුරාලීම.</li>
+          <li>ආරක්ෂිත හා විනයගරුක සේවා පරිසරයක් පවත්වා ගැනීම.</li>
+        </ul>
+        <p><strong>අපි සියලු දෙනා එක්ව අද දිනත් උසස් තත්ත්වයේ තේ නිෂ්පාදනයක් සඳහා කැපවෙමු. ඔබ සැමට සාර්ථක දවසක්! 🌿</strong></p>
+      </div>
+      {% endif %}
     {% endif %}
   </div>
 </body>
