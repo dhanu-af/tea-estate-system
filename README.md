@@ -100,3 +100,9 @@ Vercel's serverless functions have no writable, persistent local disk — every 
 5. Visit the site and go through **Create admin account** again — it's a fresh database, so the SQLite admin account you created locally doesn't carry over.
 
 Everything else (QR codes, CSV export, PDF payslips/invoices) is generated in-memory and was already Vercel-compatible; the database was the only local-file dependency.
+
+## Recovering the DKNS Super Admin account
+
+The `DKNS` account is the permanent Super Admin / System Owner (see [Login &amp; User Management](#features) above) — by design, once it exists, no one else (not even another Admin) can reach User Management, disable it, delete it, or change its role, and the app itself has no "forgot password" flow for it.
+
+If you're ever locked out of DKNS specifically (unknown/lost password on a fresh deployment, for example), that's the one legitimate case for bypassing the app directly: run `scripts/reset_super_admin.py` from your own machine against your own production database. It prompts for a new password (hidden input, never typed into chat or committed anywhere) and creates the DKNS account if it doesn't exist yet, or resets its password if it does — using the exact same password hashing the app already uses, so it works immediately with the normal login form. See the comment at the top of that script for exact steps. This intentionally requires your own Postgres connection string (from Vercel → Storage → your database), which only you have access to — there is no way to reset this account from within the running app itself, since that would defeat the point of it being protected.
