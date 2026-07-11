@@ -34,6 +34,7 @@ from database import (
     ASSET_STATUSES,
     DEPRECIATION_PERIOD_TYPES,
     LOGIN_STATUSES,
+    EMPLOYEE_DOCUMENT_TYPES,
 )
 from utils import (
     compute_attendance_hours,
@@ -42,10 +43,15 @@ from utils import (
     compute_harvest_pay,
     compute_epf_etf,
 )
+from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "tea-estate-dev-secret")
 app.teardown_appcontext(close_connection)
+app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024  # 10 MB request cap (documents are stored in the DB)
+
+EMPLOYEE_DOCUMENT_ALLOWED_EXTENSIONS = {"pdf", "jpg", "jpeg", "png"}
+EMPLOYEE_DOCUMENT_MAX_BYTES = 8 * 1024 * 1024  # 8 MB per file
 
 # Shown on the printed Finance & Factory Statement header — edit these to your
 # actual registered details; there's no company-profile settings page (yet).
@@ -205,6 +211,7 @@ def inject_lookups():
         depreciation_period_types=DEPRECIATION_PERIOD_TYPES,
         is_protected_account=_is_protected_account,
         super_admin_username=SUPER_ADMIN_USERNAME,
+        employee_document_types=EMPLOYEE_DOCUMENT_TYPES,
     )
 
 
@@ -723,6 +730,11 @@ def employee_edit(employee_id):
         (employee_id,),
     ).fetchall()
     birthday_info = _next_birthday_info(employee["date_of_birth"])
+    documents = conn.execute(
+        """SELECT id, document_type, file_name, content_type, file_size, note, uploaded_at
+           FROM employee_documents WHERE employee_id = ? ORDER BY uploaded_at DESC""",
+        (employee_id,),
+    ).fetchall()
     return render_template(
         "employee_form.html",
         employee=dict(employee),
@@ -730,6 +742,7 @@ def employee_edit(employee_id):
         employee_id=employee_id,
         recent_work=recent_work,
         birthday_info=birthday_info,
+        documents=documents,
     )
 
 
@@ -740,6 +753,84 @@ def employee_delete(employee_id):
     conn.commit()
     flash("Employee removed.", "success")
     return redirect(url_for("employee_list"))
+
+
+@app.route("/employees/<int:employee_id>/documents", methods=["POST"])
+def employee_document_upload(employee_id):
+    conn = get_connection()
+    employee = conn.execute("SELECT id FROM employees WHERE id = ?", (employee_id,)).fetchone()
+    if not employee:
+        flash("Employee not found.", "error")
+        return redirect(url_for("employee_list"))
+
+    document_type = request.form.get("document_type", "").strip()
+    note = request.form.get("note", "").strip() or None
+    file = request.files.get("file")
+
+    if document_type not in EMPLOYEE_DOCUMENT_TYPES:
+        flash("Select a valid document type.", "error")
+        return redirect(url_for("employee_edit", employee_id=employee_id))
+    if not file or not file.filename:
+        flash("Choose a file to upload.", "error")
+        return redirect(url_for("employee_edit", employee_id=employee_id))
+
+    ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
+    if ext not in EMPLOYEE_DOCUMENT_ALLOWED_EXTENSIONS:
+        flash("Only PDF, JPG, or PNG files are allowed.", "error")
+        return redirect(url_for("employee_edit", employee_id=employee_id))
+
+    data = file.read()
+    if len(data) > EMPLOYEE_DOCUMENT_MAX_BYTES:
+        flash("File is too large — the maximum is 8 MB.", "error")
+        return redirect(url_for("employee_edit", employee_id=employee_id))
+
+    conn.execute(
+        """INSERT INTO employee_documents
+               (employee_id, document_type, file_name, content_type, file_size, file_data, note, uploaded_by)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            employee_id,
+            document_type,
+            secure_filename(file.filename),
+            file.mimetype,
+            len(data),
+            data,
+            note,
+            session.get("user_id"),
+        ),
+    )
+    conn.commit()
+    flash(f"{document_type} uploaded.", "success")
+    return redirect(url_for("employee_edit", employee_id=employee_id))
+
+
+@app.route("/employees/<int:employee_id>/documents/<int:document_id>")
+def employee_document_download(employee_id, document_id):
+    conn = get_connection()
+    doc = conn.execute(
+        "SELECT * FROM employee_documents WHERE id = ? AND employee_id = ?", (document_id, employee_id)
+    ).fetchone()
+    if not doc:
+        flash("Document not found.", "error")
+        return redirect(url_for("employee_edit", employee_id=employee_id))
+
+    return send_file(
+        io.BytesIO(bytes(doc["file_data"])),
+        mimetype=doc["content_type"] or "application/octet-stream",
+        as_attachment=False,
+        download_name=doc["file_name"],
+    )
+
+
+@app.route("/employees/<int:employee_id>/documents/<int:document_id>/delete", methods=["POST"])
+def employee_document_delete(employee_id, document_id):
+    conn = get_connection()
+    conn.execute(
+        "DELETE FROM employee_documents WHERE id = ? AND employee_id = ?", (document_id, employee_id)
+    )
+    conn.commit()
+    flash("Document removed.", "success")
+    return redirect(url_for("employee_edit", employee_id=employee_id))
 
 
 @app.route("/employees/<int:employee_id>/badge.png")

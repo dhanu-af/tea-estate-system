@@ -31,6 +31,58 @@
   </div>
 </div>
 {% endif %}
+
+<div class="panel">
+  <h2>Documents</h2>
+  <p class="subtitle" style="margin-top:-6px;">Employment agreements, ID copies, certificates, and other files for {{ employee['full_name'] }}. PDF, JPG, or PNG, up to 8 MB each.</p>
+
+  {% if documents %}
+  <table style="margin-top:14px;">
+    <thead><tr><th>Type</th><th>File</th><th>Size</th><th>Uploaded</th><th>Note</th><th></th></tr></thead>
+    <tbody>
+      {% for d in documents %}
+      <tr>
+        <td>{{ d['document_type'] }}</td>
+        <td><a href="{{ url_for('employee_document_download', employee_id=employee_id, document_id=d['id']) }}" target="_blank">{{ d['file_name'] }}</a></td>
+        <td>{{ (d['file_size'] / 1024)|round(1) }} KB</td>
+        <td>{{ d['uploaded_at'][:10]|lk_date }}</td>
+        <td>{{ d['note'] or '—' }}</td>
+        <td>
+          <form method="post" action="{{ url_for('employee_document_delete', employee_id=employee_id, document_id=d['id']) }}" onsubmit="return confirm('Delete {{ d['file_name'] }}?');">
+            <button class="btn btn-danger btn-sm" type="submit">Delete</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty-state">No documents uploaded yet.</div>
+  {% endif %}
+
+  <form method="post" action="{{ url_for('employee_document_upload', employee_id=employee_id) }}" enctype="multipart/form-data" class="form-grid" style="margin-top:16px;">
+    <div class="field">
+      <label>Document Type</label>
+      <select name="document_type" required>
+        <option value="">Select</option>
+        {% for t in employee_document_types %}
+        <option value="{{ t }}">{{ t }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="field">
+      <label>File</label>
+      <input type="file" name="file" accept=".pdf,.jpg,.jpeg,.png" required>
+    </div>
+    <div class="field">
+      <label>Note (optional)</label>
+      <input type="text" name="note" placeholder="e.g. Signed 2026-01-15">
+    </div>
+    <div class="field" style="align-self:end;">
+      <button class="btn" type="submit">Upload</button>
+    </div>
+  </form>
+</div>
 {% endif %}
 
 <div class="panel">

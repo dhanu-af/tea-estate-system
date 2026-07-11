@@ -26,6 +26,7 @@ INVENTORY_TRANSACTION_TYPES = ["In", "Out"]
 ASSET_STATUSES = ["Active", "Under Repair", "Disposed"]
 DEPRECIATION_PERIOD_TYPES = ["Monthly", "Quarterly", "Yearly"]
 LOGIN_STATUSES = ["Success", "Failed"]
+EMPLOYEE_DOCUMENT_TYPES = ["Employment Agreement", "ID Copy", "Certificate", "Other"]
 
 # On Vercel there's no writable, persistent local disk for a SQLite file — every
 # serverless invocation gets its own ephemeral filesystem. So in production we
@@ -448,6 +449,20 @@ CREATE TABLE IF NOT EXISTS weather_cache (
     fetched_at TEXT NOT NULL,
     payload TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS employee_documents (
+    id SERIAL PRIMARY KEY,
+    employee_id INTEGER NOT NULL,
+    document_type TEXT NOT NULL,
+    file_name TEXT NOT NULL,
+    content_type TEXT,
+    file_size INTEGER,
+    file_data BYTEA NOT NULL,
+    note TEXT,
+    uploaded_by INTEGER,
+    uploaded_at TEXT DEFAULT (now()::text),
+    FOREIGN KEY (employee_id) REFERENCES employees (id) ON DELETE CASCADE
+);
 """
 
 
@@ -811,6 +826,20 @@ def init_db():
             id INTEGER PRIMARY KEY,
             fetched_at TEXT NOT NULL,
             payload TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS employee_documents (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            employee_id INTEGER NOT NULL,
+            document_type TEXT NOT NULL,
+            file_name TEXT NOT NULL,
+            content_type TEXT,
+            file_size INTEGER,
+            file_data BLOB NOT NULL,
+            note TEXT,
+            uploaded_by INTEGER,
+            uploaded_at TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY (employee_id) REFERENCES employees (id) ON DELETE CASCADE
         );
         """
     )
