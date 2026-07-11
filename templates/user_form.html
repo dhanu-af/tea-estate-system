@@ -7,15 +7,22 @@
   </div>
 </div>
 
+{% if mode == 'edit' and protected %}
+<div class="panel" style="border-color: var(--tea-green);">
+  🔒 <strong>Protected System Account.</strong> {{ super_admin_username }} is the permanent Super Admin (System Owner) —
+  its username and role cannot be changed, and it can never be disabled or deleted, by anyone (including other Admins).
+</div>
+{% endif %}
+
 <div class="panel">
   <form method="post" action="{{ url_for('user_edit', user_id=user_id) if mode == 'edit' else url_for('user_new') }}" class="form-grid">
     <div class="field">
       <label>Username</label>
-      <input type="text" name="username" value="{{ user.get('username') or '' }}" required autofocus>
+      <input type="text" name="username" value="{{ user.get('username') or '' }}" required autofocus {{ 'readonly disabled' if protected }}>
     </div>
     <div class="field">
       <label>Role</label>
-      <select name="role" required>
+      <select name="role" required {{ 'disabled' if protected }}>
         <option value="">Select</option>
         {% for r in user_roles %}
         <option value="{{ r }}" {{ 'selected' if user.get('role') == r }}>{{ r }}</option>
@@ -32,10 +39,16 @@
       <input type="password" name="confirm_password" required>
     </div>
     {% endif %}
+    {% if not protected %}
     <div class="field" style="align-self:end;">
       <button class="btn" type="submit">{{ 'Save Changes' if mode == 'edit' else 'Add User' }}</button>
       <a class="btn btn-secondary" href="{{ url_for('user_list') }}">Cancel</a>
     </div>
+    {% else %}
+    <div class="field" style="align-self:end;">
+      <a class="btn btn-secondary" href="{{ url_for('user_list') }}">Back to Users</a>
+    </div>
+    {% endif %}
   </form>
 </div>
 

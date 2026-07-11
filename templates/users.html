@@ -6,7 +6,10 @@
     <h1>User Management</h1>
     <p class="subtitle">Create and manage login accounts. "Dhanu Operations" accounts can use Employees, Attendance and Work &amp; Harvest, but not Payroll, Income &amp; Profit, Finance &amp; Factory, or this page.</p>
   </div>
-  <a class="btn" href="{{ url_for('user_new') }}">Add User</a>
+  <div style="display:flex; gap:8px;">
+    <a class="btn btn-secondary" href="{{ url_for('user_login_history') }}">Login History</a>
+    <a class="btn" href="{{ url_for('user_new') }}">Add User</a>
+  </div>
 </div>
 
 <div class="panel">
@@ -16,11 +19,24 @@
     <tbody>
       {% for u in users %}
       <tr>
-        <td><a href="{{ url_for('user_edit', user_id=u['id']) }}">{{ u['username'] }}</a>{% if u['id'] == session.get('user_id') %} <small>(you)</small>{% endif %}</td>
-        <td>{{ u['role'] }}</td>
+        <td>
+          <a href="{{ url_for('user_edit', user_id=u['id']) }}">{{ u['username'] }}</a>
+          {% if u['id'] == session.get('user_id') %} <small>(you)</small>{% endif %}
+        </td>
+        <td>
+          {% if is_protected_account(u) %}
+          <span class="badge badge-completed">🔒 Super Admin (System Owner)</span>
+          {% else %}
+          {{ u['role'] }}
+          {% endif %}
+        </td>
         <td><span class="badge {{ 'badge-present' if u['is_active'] else 'badge-absent' }}">{{ 'Active' if u['is_active'] else 'Disabled' }}</span></td>
         <td>{{ u['created_at'] }}</td>
         <td style="display:flex; gap:8px;">
+          {% if is_protected_account(u) %}
+          <a class="btn btn-secondary btn-sm" href="{{ url_for('user_edit', user_id=u['id']) }}">View</a>
+          <span class="subtitle" style="align-self:center;">Protected system account — cannot be edited, disabled, or deleted.</span>
+          {% else %}
           <a class="btn btn-secondary btn-sm" href="{{ url_for('user_edit', user_id=u['id']) }}">Edit</a>
           {% if u['id'] != session.get('user_id') %}
           <form method="post" action="{{ url_for('user_toggle_active', user_id=u['id']) }}" onsubmit="return confirm('{{ 'Disable' if u['is_active'] else 'Enable' }} {{ u['username'] }}?');">
@@ -29,6 +45,7 @@
           <form method="post" action="{{ url_for('user_delete', user_id=u['id']) }}" onsubmit="return confirm('Delete {{ u['username'] }}? This cannot be undone.');">
             <button class="btn btn-danger btn-sm" type="submit">Delete</button>
           </form>
+          {% endif %}
           {% endif %}
         </td>
       </tr>

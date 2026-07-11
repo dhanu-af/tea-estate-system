@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% block title %}{{ item['name'] }} · Inventory · DKNS Tea Lands{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>{{ item['name'] }}</h1>
+    <p class="subtitle">{{ item['category'] }} &middot; Unit: {{ item['unit'] }}</p>
+  </div>
+  <a class="btn btn-secondary" href="{{ url_for('inventory_list') }}">Back to Inventory</a>
+</div>
+
+<div class="cards">
+  <div class="card">
+    <div class="stat" style="color: {{ 'var(--danger)' if balance < item['minimum_stock_level'] else 'inherit' }};">{{ balance }} {{ item['unit'] }}</div>
+    <div class="label">Current balance</div>
+  </div>
+  <div class="card">
+    <div class="stat">{{ item['minimum_stock_level'] }} {{ item['unit'] }}</div>
+    <div class="label">Minimum stock level</div>
+  </div>
+  <div class="card">
+    <div class="stat">{{ item['unit_cost'] }}</div>
+    <div class="label">Unit cost</div>
+  </div>
+  <div class="card">
+    <div class="stat">{{ valuation }}</div>
+    <div class="label">Stock valuation</div>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>Record Stock Movement</h2>
+  <form method="post" action="{{ url_for('inventory_transaction_new', item_id=item['id']) }}" class="form-grid">
+    <div class="field">
+      <label>Type</label>
+      <select name="transaction_type" required>
+        <option value="">Select</option>
+        {% for t in inventory_transaction_types %}
+        <option value="{{ t }}">{{ t }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="field">
+      <label>Date</label>
+      <input type="date" name="transaction_date" required>
+    </div>
+    <div class="field">
+      <label>Quantity ({{ item['unit'] }})</label>
+      <input type="number" step="0.01" min="0.01" name="quantity" required>
+    </div>
+    <div class="field">
+      <label>Unit Cost (for Stock In)</label>
+      <input type="number" step="0.01" min="0" name="unit_cost" placeholder="Updates the item's cost">
+    </div>
+    <div class="field">
+      <label>Supplier</label>
+      <input type="text" name="supplier">
+    </div>
+    <div class="field">
+      <label>Batch Number</label>
+      <input type="text" name="batch_number">
+    </div>
+    <div class="field">
+      <label>Expiry Date</label>
+      <input type="date" name="expiry_date">
+    </div>
+    <div class="field" style="grid-column: span 2;">
+      <label>Note</label>
+      <input type="text" name="note">
+    </div>
+    <div class="field" style="align-self:end;">
+      <button class="btn" type="submit">Record Movement</button>
+    </div>
+  </form>
+</div>
+
+<div class="panel">
+  <h2>Transaction History</h2>
+  {% if transactions %}
+  <table>
+    <thead>
+      <tr>
+        <th>Date</th><th>Type</th><th>Quantity</th><th>Unit Cost</th>
+        <th>Supplier</th><th>Batch No.</th><th>Expiry</th><th>Note</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for t in transactions %}
+      <tr>
+        <td>{{ t['transaction_date'] }}</td>
+        <td><span class="badge {{ 'badge-present' if t['transaction_type'] == 'In' else 'badge-absent' }}">{{ t['transaction_type'] }}</span></td>
+        <td>{{ t['quantity'] }} {{ item['unit'] }}</td>
+        <td>{{ t['unit_cost'] if t['unit_cost'] is not none else '—' }}</td>
+        <td>{{ t['supplier'] or '—' }}</td>
+        <td>{{ t['batch_number'] or '—' }}</td>
+        <td>{{ t['expiry_date'] or '—' }}</td>
+        <td>{{ t['note'] or '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty-state">No stock movements recorded yet.</div>
+  {% endif %}
+</div>
+{% endblock %}

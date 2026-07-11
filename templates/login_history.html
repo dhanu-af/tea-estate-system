@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}Login History · DKNS Tea Lands{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>User Login History</h1>
+    <p class="subtitle">Every login attempt — successful or failed — with IP address, device/browser, and timing. Showing the most recent 500.</p>
+  </div>
+  <a class="btn btn-secondary" href="{{ url_for('user_list') }}">Back to Users</a>
+</div>
+
+<form method="get" class="search-bar" style="flex-wrap: wrap;">
+  <input type="text" name="q" value="{{ search }}" placeholder="Search by username">
+  <select name="status">
+    <option value="">Any status</option>
+    <option value="Success" {{ 'selected' if status_filter == 'Success' }}>Success</option>
+    <option value="Failed" {{ 'selected' if status_filter == 'Failed' }}>Failed</option>
+  </select>
+  <input type="date" name="date" value="{{ date_filter }}">
+  <button class="btn btn-secondary" type="submit">Filter</button>
+  {% if search or status_filter or date_filter %}
+  <a class="btn btn-secondary" href="{{ url_for('user_login_history') }}">Reset</a>
+  {% endif %}
+</form>
+
+<div class="panel">
+  {% if records %}
+  <table>
+    <thead>
+      <tr>
+        <th>Username</th><th>Login Date</th><th>Login Time</th><th>Logout Time</th>
+        <th>IP Address</th><th>Device / Browser</th><th>Status</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in records %}
+      <tr>
+        <td>{{ r['username'] }}</td>
+        <td>{{ r['login_at'][:10] if r['login_at'] else '—' }}</td>
+        <td>{{ r['login_at'][11:19] if r['login_at'] else '—' }}</td>
+        <td>{{ r['logout_at'][11:19] if r['logout_at'] else '—' }}</td>
+        <td>{{ r['ip_address'] or '—' }}</td>
+        <td>{{ r['device_browser'] or '—' }}</td>
+        <td><span class="badge {{ 'badge-present' if r['status'] == 'Success' else 'badge-absent' }}">{{ r['status'] }}</span></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty-state">No login attempts match these filters.</div>
+  {% endif %}
+</div>
+{% endblock %}

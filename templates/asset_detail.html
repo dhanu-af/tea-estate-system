@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+{% block title %}{{ asset['name'] }} · Assets · DKNS Tea Lands{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>{{ asset['name'] }} <small style="color:var(--muted);">({{ asset['asset_code'] }})</small></h1>
+    <p class="subtitle">{{ asset['category'] or 'Uncategorized' }} &middot; <span class="badge {{ 'badge-present' if asset['status'] == 'Active' else 'badge-in-progress' if asset['status'] == 'Under Repair' else 'badge-pending' }}">{{ asset['status'] }}</span></p>
+  </div>
+  <a class="btn btn-secondary" href="{{ url_for('asset_edit', asset_id=asset['id']) }}">Edit Asset</a>
+</div>
+
+<div class="cards">
+  <div class="card">
+    <div class="stat">{{ asset['purchase_cost'] if asset['purchase_cost'] is not none else '—' }}</div>
+    <div class="label">Purchase cost ({{ asset['purchase_date'] or 'unknown date' }})</div>
+  </div>
+  {% if depreciation %}
+  <div class="card">
+    <div class="stat">{{ depreciation['accumulated'] }}</div>
+    <div class="label">Accumulated depreciation ({{ depreciation['months_elapsed'] }} of {{ asset['depreciation_period_months'] }} months)</div>
+  </div>
+  <div class="card">
+    <div class="stat">{{ depreciation['book_value'] }}</div>
+    <div class="label">Current book value{% if depreciation['fully_depreciated'] %} (fully depreciated){% endif %}</div>
+  </div>
+  <div class="card">
+    <div class="stat">{{ depreciation['monthly_amount'] }}</div>
+    <div class="label">Depreciation per month (straight-line)</div>
+  </div>
+  {% else %}
+  <div class="card">
+    <div class="stat">—</div>
+    <div class="label">Not depreciable (set purchase cost, date &amp; period to enable)</div>
+  </div>
+  {% endif %}
+</div>
+
+<div class="panel">
+  <h2>Asset Details</h2>
+  <table>
+    <tbody>
+      <tr><td style="color:var(--muted);">Supplier</td><td>{{ asset['supplier'] or '—' }}</td></tr>
+      <tr><td style="color:var(--muted);">Serial Number</td><td>{{ asset['serial_number'] or '—' }}</td></tr>
+      <tr><td style="color:var(--muted);">Assigned Location</td><td>{{ asset['assigned_location'] or '—' }}</td></tr>
+      <tr><td style="color:var(--muted);">Assigned Employee</td><td>{{ asset['assigned_employee_name'] or '—' }}</td></tr>
+      <tr><td style="color:var(--muted);">Warranty Expiry</td><td>{{ asset['warranty_expiry'] or '—' }}</td></tr>
+      <tr><td style="color:var(--muted);">Service Schedule</td><td>{{ asset['service_schedule'] or '—' }}</td></tr>
+      <tr><td style="color:var(--muted);">Next Service Date</td><td>{{ asset['next_service_date'] or '—' }}</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="panel">
+  <h2>Log Maintenance</h2>
+  <form method="post" action="{{ url_for('asset_maintenance_new', asset_id=asset['id']) }}" class="form-grid">
+    <div class="field">
+      <label>Date</label>
+      <input type="date" name="maintenance_date" required>
+    </div>
+    <div class="field" style="grid-column: span 2;">
+      <label>Description</label>
+      <input type="text" name="description" placeholder="e.g. Oil change, blade sharpening" required>
+    </div>
+    <div class="field">
+      <label>Cost</label>
+      <input type="number" step="0.01" min="0" name="cost">
+    </div>
+    <div class="field">
+      <label>Performed By</label>
+      <input type="text" name="performed_by">
+    </div>
+    <div class="field">
+      <label>Next Service Date</label>
+      <input type="date" name="next_service_date">
+    </div>
+    <div class="field" style="align-self:end;">
+      <button class="btn" type="submit">Add Record</button>
+    </div>
+  </form>
+</div>
+
+<div class="panel">
+  <h2>Maintenance History</h2>
+  {% if maintenance_log %}
+  <table>
+    <thead><tr><th>Date</th><th>Description</th><th>Cost</th><th>Performed By</th><th>Next Service</th></tr></thead>
+    <tbody>
+      {% for m in maintenance_log %}
+      <tr>
+        <td>{{ m['maintenance_date'] }}</td>
+        <td>{{ m['description'] }}</td>
+        <td>{{ m['cost'] if m['cost'] is not none else '—' }}</td>
+        <td>{{ m['performed_by'] or '—' }}</td>
+        <td>{{ m['next_service_date'] or '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty-state">No maintenance recorded yet.</div>
+  {% endif %}
+</div>
+{% endblock %}

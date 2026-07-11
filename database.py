@@ -21,6 +21,11 @@ USER_ROLES = ["Admin", "Dhanu Operations"]
 BANK_ACCOUNT_TYPES = ["Savings", "Current"]
 PAYROLL_CYCLE_STATUSES = ["Unpaid", "Paid"]
 PAYROLL_TRANSACTION_STATUSES = ["Pending", "Paid", "Failed"]
+INVENTORY_CATEGORIES = ["Fertilizer", "Chemicals", "Packaging Materials", "Field Supplies", "Other"]
+INVENTORY_TRANSACTION_TYPES = ["In", "Out"]
+ASSET_STATUSES = ["Active", "Under Repair", "Disposed"]
+DEPRECIATION_PERIOD_TYPES = ["Monthly", "Quarterly", "Yearly"]
+LOGIN_STATUSES = ["Success", "Failed"]
 
 # On Vercel there's no writable, persistent local disk for a SQLite file — every
 # serverless invocation gets its own ephemeral filesystem. So in production we
@@ -341,6 +346,108 @@ CREATE TABLE IF NOT EXISTS payroll_transactions (
     FOREIGN KEY (cycle_id) REFERENCES payroll_cycles (id) ON DELETE CASCADE,
     FOREIGN KEY (employee_id) REFERENCES employees (id) ON DELETE SET NULL
 );
+
+CREATE TABLE IF NOT EXISTS login_history (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER,
+    username TEXT NOT NULL,
+    ip_address TEXT,
+    device_browser TEXT,
+    status TEXT NOT NULL,
+    login_at TEXT DEFAULT (now()::text),
+    logout_at TEXT,
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS inventory_items (
+    id SERIAL PRIMARY KEY,
+    name TEXT NOT NULL,
+    category TEXT NOT NULL,
+    unit TEXT NOT NULL,
+    minimum_stock_level REAL NOT NULL DEFAULT 0,
+    unit_cost REAL NOT NULL DEFAULT 0,
+    created_by INTEGER,
+    created_at TEXT DEFAULT (now()::text),
+    updated_at TEXT DEFAULT (now()::text)
+);
+
+CREATE TABLE IF NOT EXISTS inventory_transactions (
+    id SERIAL PRIMARY KEY,
+    item_id INTEGER NOT NULL,
+    transaction_type TEXT NOT NULL,
+    quantity REAL NOT NULL,
+    unit_cost REAL,
+    supplier TEXT,
+    batch_number TEXT,
+    expiry_date TEXT,
+    transaction_date TEXT NOT NULL,
+    note TEXT,
+    created_by INTEGER,
+    created_at TEXT DEFAULT (now()::text),
+    FOREIGN KEY (item_id) REFERENCES inventory_items (id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS assets (
+    id SERIAL PRIMARY KEY,
+    asset_code TEXT UNIQUE NOT NULL,
+    name TEXT NOT NULL,
+    category TEXT,
+    purchase_date TEXT,
+    purchase_cost REAL,
+    salvage_value REAL NOT NULL DEFAULT 0,
+    supplier TEXT,
+    serial_number TEXT,
+    assigned_location TEXT,
+    assigned_employee_id INTEGER,
+    warranty_expiry TEXT,
+    service_schedule TEXT,
+    next_service_date TEXT,
+    status TEXT NOT NULL DEFAULT 'Active',
+    depreciation_period_months INTEGER,
+    created_by INTEGER,
+    created_at TEXT DEFAULT (now()::text),
+    updated_at TEXT DEFAULT (now()::text),
+    FOREIGN KEY (assigned_employee_id) REFERENCES employees (id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS asset_maintenance_log (
+    id SERIAL PRIMARY KEY,
+    asset_id INTEGER NOT NULL,
+    maintenance_date TEXT NOT NULL,
+    description TEXT NOT NULL,
+    cost REAL,
+    performed_by TEXT,
+    next_service_date TEXT,
+    created_by INTEGER,
+    created_at TEXT DEFAULT (now()::text),
+    FOREIGN KEY (asset_id) REFERENCES assets (id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS prepaid_expenses (
+    id SERIAL PRIMARY KEY,
+    description TEXT NOT NULL,
+    category TEXT,
+    total_cost REAL NOT NULL,
+    start_date TEXT NOT NULL,
+    period_type TEXT NOT NULL DEFAULT 'Monthly',
+    period_count INTEGER NOT NULL,
+    created_by INTEGER,
+    created_at TEXT DEFAULT (now()::text)
+);
+
+CREATE TABLE IF NOT EXISTS announcements (
+    id SERIAL PRIMARY KEY,
+    message TEXT NOT NULL,
+    is_active INTEGER NOT NULL DEFAULT 1,
+    created_by INTEGER,
+    created_at TEXT DEFAULT (now()::text)
+);
+
+CREATE TABLE IF NOT EXISTS weather_cache (
+    id INTEGER PRIMARY KEY,
+    fetched_at TEXT NOT NULL,
+    payload TEXT NOT NULL
+);
 """
 
 
@@ -602,6 +709,108 @@ def init_db():
             created_at TEXT DEFAULT (datetime('now')),
             FOREIGN KEY (cycle_id) REFERENCES payroll_cycles (id) ON DELETE CASCADE,
             FOREIGN KEY (employee_id) REFERENCES employees (id) ON DELETE SET NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS login_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            username TEXT NOT NULL,
+            ip_address TEXT,
+            device_browser TEXT,
+            status TEXT NOT NULL,
+            login_at TEXT DEFAULT (datetime('now')),
+            logout_at TEXT,
+            FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE SET NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS inventory_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            category TEXT NOT NULL,
+            unit TEXT NOT NULL,
+            minimum_stock_level REAL NOT NULL DEFAULT 0,
+            unit_cost REAL NOT NULL DEFAULT 0,
+            created_by INTEGER,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS inventory_transactions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            item_id INTEGER NOT NULL,
+            transaction_type TEXT NOT NULL,
+            quantity REAL NOT NULL,
+            unit_cost REAL,
+            supplier TEXT,
+            batch_number TEXT,
+            expiry_date TEXT,
+            transaction_date TEXT NOT NULL,
+            note TEXT,
+            created_by INTEGER,
+            created_at TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY (item_id) REFERENCES inventory_items (id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS assets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            asset_code TEXT UNIQUE NOT NULL,
+            name TEXT NOT NULL,
+            category TEXT,
+            purchase_date TEXT,
+            purchase_cost REAL,
+            salvage_value REAL NOT NULL DEFAULT 0,
+            supplier TEXT,
+            serial_number TEXT,
+            assigned_location TEXT,
+            assigned_employee_id INTEGER,
+            warranty_expiry TEXT,
+            service_schedule TEXT,
+            next_service_date TEXT,
+            status TEXT NOT NULL DEFAULT 'Active',
+            depreciation_period_months INTEGER,
+            created_by INTEGER,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY (assigned_employee_id) REFERENCES employees (id) ON DELETE SET NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS asset_maintenance_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            asset_id INTEGER NOT NULL,
+            maintenance_date TEXT NOT NULL,
+            description TEXT NOT NULL,
+            cost REAL,
+            performed_by TEXT,
+            next_service_date TEXT,
+            created_by INTEGER,
+            created_at TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY (asset_id) REFERENCES assets (id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS prepaid_expenses (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            description TEXT NOT NULL,
+            category TEXT,
+            total_cost REAL NOT NULL,
+            start_date TEXT NOT NULL,
+            period_type TEXT NOT NULL DEFAULT 'Monthly',
+            period_count INTEGER NOT NULL,
+            created_by INTEGER,
+            created_at TEXT DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS announcements (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            message TEXT NOT NULL,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            created_by INTEGER,
+            created_at TEXT DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS weather_cache (
+            id INTEGER PRIMARY KEY,
+            fetched_at TEXT NOT NULL,
+            payload TEXT NOT NULL
         );
         """
     )

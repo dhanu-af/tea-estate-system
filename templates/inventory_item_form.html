@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Edit' if mode == 'edit' else 'Add' }} Inventory Item · DKNS Tea Lands{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>{{ 'Edit' if mode == 'edit' else 'Add' }} Inventory Item</h1>
+  </div>
+</div>
+
+<div class="panel">
+  <form method="post" action="{{ url_for('inventory_item_edit', item_id=item_id) if mode == 'edit' else url_for('inventory_item_new') }}" class="form-grid">
+    <div class="field">
+      <label>Name</label>
+      <input type="text" name="name" value="{{ item.get('name') or '' }}" required>
+    </div>
+    <div class="field">
+      <label>Category</label>
+      <select name="category" required>
+        <option value="">Select</option>
+        {% for c in inventory_categories %}
+        <option value="{{ c }}" {{ 'selected' if item.get('category') == c }}>{{ c }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="field">
+      <label>Unit</label>
+      <input type="text" name="unit" value="{{ item.get('unit') or '' }}" placeholder="e.g. kg, litre, bag" required>
+    </div>
+    <div class="field">
+      <label>Minimum Stock Level</label>
+      <input type="number" step="0.01" min="0" name="minimum_stock_level" value="{{ item.get('minimum_stock_level') if item.get('minimum_stock_level') is not none else '' }}" placeholder="e.g. 20">
+    </div>
+    <div class="field">
+      <label>Unit Cost</label>
+      <input type="number" step="0.01" min="0" name="unit_cost" value="{{ item.get('unit_cost') if item.get('unit_cost') is not none else '' }}" placeholder="e.g. 350.00">
+    </div>
+    <div class="field" style="align-self:end;">
+      <button class="btn" type="submit">{{ 'Save Changes' if mode == 'edit' else 'Add Item' }}</button>
+      <a class="btn btn-secondary" href="{{ url_for('inventory_list') }}">Cancel</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

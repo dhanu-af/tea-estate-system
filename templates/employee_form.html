@@ -18,6 +18,19 @@
     <a class="btn btn-secondary btn-sm" href="{{ url_for('employee_badge', employee_id=employee_id) }}" download="{{ employee['employee_number'] }}-badge.png">Download badge</a>
   </div>
 </div>
+{% if birthday_info %}
+<div class="panel" style="display:flex; align-items:center; gap:12px;">
+  <span style="font-size:2rem;">🎂</span>
+  <div>
+    {% if birthday_info['days_until'] == 0 %}
+    <strong>It's {{ employee['full_name'] }}'s birthday today!</strong> Turning {{ birthday_info['turning_age'] }}.
+    {% else %}
+    <strong>Next birthday: {{ birthday_info['next_date']|lk_date }}</strong>
+    &middot; in {{ birthday_info['days_until'] }} day{{ 's' if birthday_info['days_until'] != 1 else '' }}, turning {{ birthday_info['turning_age'] }}
+    {% endif %}
+  </div>
+</div>
+{% endif %}
 {% endif %}
 
 <div class="panel">

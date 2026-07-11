@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Weather · DKNS Tea Lands{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Weather</h1>
+    <p class="subtitle">7-day forecast for {{ forecast['location'] if forecast else 'Galle, Sri Lanka' }}, refreshed automatically from Open-Meteo.</p>
+  </div>
+</div>
+
+{% if not forecast %}
+<div class="panel">
+  <div class="empty-state">Weather data is temporarily unavailable — Open-Meteo could not be reached and no cached forecast exists yet. Try again shortly.</div>
+</div>
+{% else %}
+<div class="cards">
+  <div class="card">
+    <div class="stat">{{ forecast['current']['icon'] }} {{ forecast['current']['temperature'] }}&deg;C</div>
+    <div class="label">Current &middot; {{ forecast['current']['description'] }}</div>
+  </div>
+  <div class="card">
+    <div class="stat">{{ forecast['current']['windspeed'] }} km/h</div>
+    <div class="label">Wind speed</div>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>7-Day Forecast</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Date</th><th>Conditions</th><th>High</th><th>Low</th><th>Rain Chance</th><th>Rainfall</th><th>Wind</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for d in forecast['days'] %}
+      <tr>
+        <td>{{ d['date']|lk_date }}</td>
+        <td>{{ d['icon'] }} {{ d['description'] }}</td>
+        <td>{{ d['temp_max'] }}&deg;C</td>
+        <td>{{ d['temp_min'] }}&deg;C</td>
+        <td>{{ d['precipitation_probability_max'] if d['precipitation_probability_max'] is not none else '—' }}%</td>
+        <td>{{ d['precipitation_sum'] }} mm</td>
+        <td>{{ d['windspeed_max'] }} km/h</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+{% endblock %}

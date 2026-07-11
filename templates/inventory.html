@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block title %}Inventory & Stock · DKNS Tea Lands{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Inventory &amp; Stock Management</h1>
+    <p class="subtitle">Fertilizer, chemicals, packaging, field supplies, and other estate stock.</p>
+  </div>
+  <div style="display:flex; gap:8px;">
+    <a class="btn btn-secondary" href="{{ url_for('inventory_transaction_list') }}">All Transactions</a>
+    <a class="btn" href="{{ url_for('inventory_item_new') }}">Add Item</a>
+  </div>
+</div>
+
+<div class="cards">
+  <div class="card">
+    <div class="stat">{{ items|length }}</div>
+    <div class="label">Items tracked</div>
+  </div>
+  <div class="card">
+    <div class="stat" style="color: {{ 'var(--danger)' if low_stock_count else 'inherit' }};">{{ low_stock_count }}</div>
+    <div class="label">Below minimum stock level</div>
+  </div>
+  <div class="card">
+    <div class="stat">{{ total_valuation }}</div>
+    <div class="label">Total stock valuation</div>
+  </div>
+</div>
+
+<form class="search-bar" method="get">
+  <select name="category">
+    <option value="">All categories</option>
+    {% for c in inventory_categories %}
+    <option value="{{ c }}" {{ 'selected' if category_filter == c }}>{{ c }}</option>
+    {% endfor %}
+  </select>
+  <button class="btn btn-secondary" type="submit">Filter</button>
+  {% if category_filter %}<a class="btn btn-secondary" href="{{ url_for('inventory_list') }}">Clear</a>{% endif %}
+</form>
+
+<div class="panel">
+  {% if items %}
+  <table>
+    <thead>
+      <tr>
+        <th>Item</th><th>Category</th><th>Balance</th><th>Min. Level</th>
+        <th>Unit Cost</th><th>Valuation</th><th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for i in items %}
+      <tr style="{{ 'background: rgba(255,107,107,0.08);' if i['low_stock'] }}">
+        <td><a href="{{ url_for('inventory_item_detail', item_id=i['id']) }}">{{ i['name'] }}</a></td>
+        <td>{{ i['category'] }}</td>
+        <td style="color: {{ 'var(--danger)' if i['low_stock'] else 'inherit' }};">
+          {{ i['balance'] }} {{ i['unit'] }}
+          {% if i['low_stock'] %}<span class="badge badge-absent" title="Below minimum stock level">Low</span>{% endif %}
+        </td>
+        <td>{{ i['minimum_stock_level'] }} {{ i['unit'] }}</td>
+        <td>{{ i['unit_cost'] }}</td>
+        <td>{{ i['valuation'] }}</td>
+        <td style="display:flex; gap:8px;">
+          <a class="btn btn-secondary btn-sm" href="{{ url_for('inventory_item_edit', item_id=i['id']) }}">Edit</a>
+          <form method="post" action="{{ url_for('inventory_item_delete', item_id=i['id']) }}" onsubmit="return confirm('Delete {{ i['name'] }} and all its transaction history?');">
+            <button class="btn btn-danger btn-sm" type="submit">Delete</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty-state">No inventory items yet.</div>
+  {% endif %}
+</div>
+{% endblock %}

@@ -1,5 +1,9 @@
+import calendar
 import io
+import json
 import os
+import urllib.error
+import urllib.request
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -25,6 +29,11 @@ from database import (
     USER_ROLES,
     BANK_ACCOUNT_TYPES,
     PAYROLL_TRANSACTION_STATUSES,
+    INVENTORY_CATEGORIES,
+    INVENTORY_TRANSACTION_TYPES,
+    ASSET_STATUSES,
+    DEPRECIATION_PERIOD_TYPES,
+    LOGIN_STATUSES,
 )
 from utils import (
     compute_attendance_hours,
@@ -63,7 +72,38 @@ PUBLIC_ENDPOINTS = {"checkin", "employee_badge", "login", "setup", "static"}
 # Endpoints whose name starts with one of these prefixes are Admin-only — the
 # "Dhanu Operations" role can use everything else (Dashboard, Employees,
 # Attendance, Work & Harvest) but is redirected away from these.
-ADMIN_ONLY_PREFIXES = ("payroll", "income", "finance", "factory", "delivery", "invoice", "user")
+ADMIN_ONLY_PREFIXES = (
+    "payroll", "income", "finance", "factory", "delivery", "invoice", "user",
+    "asset", "prepaid", "depreciation", "announcement",
+)
+
+# The permanent Super Admin / System Owner account. This one specific username
+# is a protected system account: it can never be disabled, deleted, demoted,
+# or renamed by anyone (including other Admins, and including itself) through
+# the app, and it is the only account that can reach User Management at all
+# once it exists — see _protected_account_exists() below for the bootstrap
+# exception that keeps a brand-new install from locking itself out.
+SUPER_ADMIN_USERNAME = "DKNS"
+
+# Endpoints that create/edit/disable/delete users or change passwords — once the
+# protected System Owner account exists, only that account may reach these.
+# user_login_history is deliberately excluded: it's an audit trail, not user
+# management, so any Admin may still view it.
+SUPER_ADMIN_ONLY_ENDPOINTS = {
+    "user_list", "user_new", "user_edit", "user_change_password",
+    "user_toggle_active", "user_delete",
+}
+
+
+def _is_protected_account(user):
+    return bool(user) and user["username"].strip().lower() == SUPER_ADMIN_USERNAME.lower()
+
+
+def _protected_account_exists(conn):
+    row = conn.execute(
+        "SELECT COUNT(*) AS c FROM users WHERE LOWER(username) = LOWER(?)", (SUPER_ADMIN_USERNAME,)
+    ).fetchone()
+    return row["c"] > 0
 
 
 @app.before_request
@@ -87,9 +127,18 @@ def require_login():
         flash("This account has been disabled. Contact your administrator.", "error")
         return redirect(url_for("login"))
     session["role"] = user["role"]
+    session["is_super_admin"] = _is_protected_account(user)
 
     if user["role"] != "Admin" and request.endpoint.startswith(ADMIN_ONLY_PREFIXES):
         flash("Your account doesn't have access to that section.", "error")
+        return redirect(url_for("dashboard"))
+
+    if (
+        request.endpoint in SUPER_ADMIN_ONLY_ENDPOINTS
+        and not session["is_super_admin"]
+        and _protected_account_exists(conn)
+    ):
+        flash(f"Only the {SUPER_ADMIN_USERNAME} (System Owner) account can manage users.", "error")
         return redirect(url_for("dashboard"))
 
 EMPLOYEE_FIELDS = [
@@ -141,6 +190,12 @@ def inject_lookups():
         user_roles=USER_ROLES,
         bank_account_types=BANK_ACCOUNT_TYPES,
         payroll_transaction_statuses=PAYROLL_TRANSACTION_STATUSES,
+        inventory_categories=INVENTORY_CATEGORIES,
+        inventory_transaction_types=INVENTORY_TRANSACTION_TYPES,
+        asset_statuses=ASSET_STATUSES,
+        depreciation_period_types=DEPRECIATION_PERIOD_TYPES,
+        is_protected_account=_is_protected_account,
+        super_admin_username=SUPER_ADMIN_USERNAME,
     )
 
 
@@ -195,6 +250,15 @@ def dashboard():
         ).fetchone()["c"]
         trend_present.append(p)
 
+    tea_price = _latest_tea_price(conn)
+    weather = _fetch_weather_forecast()
+    upcoming_birthdays = _upcoming_birthdays(conn, within_days=30)
+    announcements = conn.execute(
+        """SELECT a.*, u.username AS created_by_name FROM announcements a
+           LEFT JOIN users u ON u.id = a.created_by
+           WHERE a.is_active = 1 ORDER BY a.id DESC LIMIT 10"""
+    ).fetchall()
+
     return render_template(
         "dashboard.html",
         employee_count=employee_count,
@@ -208,6 +272,10 @@ def dashboard():
         trend_labels=trend_labels,
         trend_harvest=trend_harvest,
         trend_present=trend_present,
+        tea_price=tea_price,
+        weather=weather,
+        upcoming_birthdays=upcoming_birthdays,
+        announcements=announcements,
     )
 
 
@@ -249,6 +317,30 @@ def setup():
     return render_template("setup.html")
 
 
+def _client_ip():
+    forwarded = request.headers.get("X-Forwarded-For", "")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.remote_addr or "—"
+
+
+def _device_browser():
+    ua = request.user_agent
+    platform = (ua.platform or "").title()
+    browser = (ua.browser or "").title()
+    if platform or browser:
+        return " · ".join(p for p in (platform, browser) if p)
+    return (ua.string or "—")[:120]
+
+
+def _record_login_attempt(conn, username, status, user_id=None):
+    conn.execute(
+        "INSERT INTO login_history (user_id, username, ip_address, device_browser, status) VALUES (?, ?, ?, ?, ?)",
+        (user_id, username, _client_ip(), _device_browser(), status),
+    )
+    conn.commit()
+
+
 @app.route("/login", methods=["GET", "POST"])
 def login():
     conn = get_connection()
@@ -263,14 +355,18 @@ def login():
 
         if user and check_password_hash(user["password_hash"], password):
             if not user["is_active"]:
+                _record_login_attempt(conn, username, "Failed", user_id=user["id"])
                 flash("This account has been disabled. Contact your administrator.", "error")
                 return render_template("login.html")
             session["user_id"] = user["id"]
             session["username"] = user["username"]
             session["role"] = user["role"]
+            session["is_super_admin"] = _is_protected_account(user)
+            _record_login_attempt(conn, username, "Success", user_id=user["id"])
             flash(f"Welcome, {user['username']}.", "success")
             return redirect(url_for("dashboard"))
 
+        _record_login_attempt(conn, username or "(blank)", "Failed", user_id=user["id"] if user else None)
         flash("Invalid username or password.", "error")
         return render_template("login.html")
 
@@ -279,6 +375,17 @@ def login():
 
 @app.route("/logout", methods=["POST"])
 def logout():
+    conn = get_connection()
+    user_id = session.get("user_id")
+    if user_id:
+        conn.execute(
+            """UPDATE login_history SET logout_at = ? WHERE id = (
+                   SELECT id FROM login_history WHERE user_id = ? AND status = 'Success' AND logout_at IS NULL
+                   ORDER BY id DESC LIMIT 1
+               )""",
+            (_now_text(), user_id),
+        )
+        conn.commit()
     session.clear()
     flash("Logged out.", "success")
     return redirect(url_for("login"))
@@ -321,6 +428,10 @@ def user_new():
             return render_template("user_form.html", user=request.form, mode="new")
 
         conn = get_connection()
+        if username.lower() == SUPER_ADMIN_USERNAME.lower() and _protected_account_exists(conn):
+            flash("Access Denied – Protected System Account. That username is reserved.", "error")
+            return render_template("user_form.html", user=request.form, mode="new")
+
         try:
             conn.execute(
                 "INSERT INTO users (username, password_hash, role, is_active) VALUES (?, ?, ?, 1)",
@@ -345,12 +456,26 @@ def user_edit(user_id):
         flash("User not found.", "error")
         return redirect(url_for("user_list"))
 
+    protected = _is_protected_account(user)
+
     if request.method == "POST":
+        if protected:
+            flash(
+                f"Access Denied – Protected System Account. {SUPER_ADMIN_USERNAME}'s username and role are locked.",
+                "error",
+            )
+            return redirect(url_for("user_list"))
+
         username = request.form.get("username", "").strip()
         role = request.form.get("role", "").strip()
 
         if not username:
             flash("Username is required.", "error")
+            merged = dict(user)
+            merged.update(request.form)
+            return render_template("user_form.html", user=merged, mode="edit", user_id=user_id)
+        if username.lower() == SUPER_ADMIN_USERNAME.lower():
+            flash("Access Denied – Protected System Account. That username is reserved.", "error")
             merged = dict(user)
             merged.update(request.form)
             return render_template("user_form.html", user=merged, mode="edit", user_id=user_id)
@@ -376,7 +501,7 @@ def user_edit(user_id):
         flash("User updated.", "success")
         return redirect(url_for("user_list"))
 
-    return render_template("user_form.html", user=dict(user), mode="edit", user_id=user_id)
+    return render_template("user_form.html", user=dict(user), mode="edit", user_id=user_id, protected=protected)
 
 
 @app.route("/users/<int:user_id>/password", methods=["POST"])
@@ -413,6 +538,10 @@ def user_toggle_active(user_id):
         flash("User not found.", "error")
         return redirect(url_for("user_list"))
 
+    if _is_protected_account(user):
+        flash(f"Access Denied – Protected System Account. {SUPER_ADMIN_USERNAME} cannot be disabled.", "error")
+        return redirect(url_for("user_list"))
+
     if user_id == session.get("user_id"):
         flash("You can't disable your own account. Ask another admin to do it.", "error")
         return redirect(url_for("user_list"))
@@ -436,6 +565,10 @@ def user_delete(user_id):
         flash("User not found.", "error")
         return redirect(url_for("user_list"))
 
+    if _is_protected_account(user):
+        flash(f"Access Denied – Protected System Account. {SUPER_ADMIN_USERNAME} cannot be deleted.", "error")
+        return redirect(url_for("user_list"))
+
     if user_id == session.get("user_id"):
         flash("You can't delete your own account while logged in.", "error")
         return redirect(url_for("user_list"))
@@ -448,6 +581,32 @@ def user_delete(user_id):
     conn.commit()
     flash(f"User {user['username']} removed.", "success")
     return redirect(url_for("user_list"))
+
+
+@app.route("/users/login-history")
+def user_login_history():
+    conn = get_connection()
+    search = request.args.get("q", "").strip()
+    status_filter = request.args.get("status", "").strip()
+    date_filter = request.args.get("date", "").strip()
+
+    query = "SELECT * FROM login_history WHERE 1=1"
+    params = []
+    if search:
+        query += " AND username LIKE ?"
+        params.append(f"%{search}%")
+    if status_filter in LOGIN_STATUSES:
+        query += " AND status = ?"
+        params.append(status_filter)
+    if date_filter:
+        query += " AND login_at LIKE ?"
+        params.append(f"{date_filter}%")
+    query += " ORDER BY id DESC LIMIT 500"
+
+    records = conn.execute(query, params).fetchall()
+    return render_template(
+        "login_history.html", records=records, search=search, status_filter=status_filter, date_filter=date_filter
+    )
 
 
 # ---------- Employees ----------
@@ -466,7 +625,8 @@ def employee_list():
         ).fetchall()
     else:
         rows = conn.execute("SELECT * FROM employees ORDER BY id DESC").fetchall()
-    return render_template("employees.html", employees=rows, q=q)
+    upcoming_birthdays = _upcoming_birthdays(conn, within_days=30)
+    return render_template("employees.html", employees=rows, q=q, upcoming_birthdays=upcoming_birthdays)
 
 
 @app.route("/employees/new", methods=["GET", "POST"])
@@ -553,8 +713,14 @@ def employee_edit(employee_id):
            ORDER BY date DESC, id DESC LIMIT 5""",
         (employee_id,),
     ).fetchall()
+    birthday_info = _next_birthday_info(employee["date_of_birth"])
     return render_template(
-        "employee_form.html", employee=dict(employee), mode="edit", employee_id=employee_id, recent_work=recent_work
+        "employee_form.html",
+        employee=dict(employee),
+        mode="edit",
+        employee_id=employee_id,
+        recent_work=recent_work,
+        birthday_info=birthday_info,
     )
 
 
@@ -1061,6 +1227,215 @@ def lk_date(value):
         return date.fromisoformat(value).strftime("%d/%m/%Y")
     except (ValueError, TypeError):
         return value
+
+
+# ---------- Weather (Open-Meteo, 7-day forecast for Galle) ----------
+
+GALLE_LATITUDE = 6.0535
+GALLE_LONGITUDE = 80.2210
+WEATHER_CACHE_TTL_MINUTES = 45
+
+WEATHER_CODE_INFO = {
+    0: ("Clear sky", "☀️"),
+    1: ("Mainly clear", "🌤️"),
+    2: ("Partly cloudy", "⛅"),
+    3: ("Overcast", "☁️"),
+    45: ("Fog", "🌫️"),
+    48: ("Depositing rime fog", "🌫️"),
+    51: ("Light drizzle", "🌦️"),
+    53: ("Moderate drizzle", "🌦️"),
+    55: ("Dense drizzle", "🌦️"),
+    56: ("Light freezing drizzle", "🌦️"),
+    57: ("Dense freezing drizzle", "🌦️"),
+    61: ("Slight rain", "🌧️"),
+    63: ("Moderate rain", "🌧️"),
+    65: ("Heavy rain", "🌧️"),
+    66: ("Light freezing rain", "🌧️"),
+    67: ("Heavy freezing rain", "🌧️"),
+    71: ("Slight snow fall", "🌨️"),
+    73: ("Moderate snow fall", "🌨️"),
+    75: ("Heavy snow fall", "🌨️"),
+    77: ("Snow grains", "🌨️"),
+    80: ("Slight rain showers", "🌦️"),
+    81: ("Moderate rain showers", "🌧️"),
+    82: ("Violent rain showers", "⛈️"),
+    85: ("Slight snow showers", "🌨️"),
+    86: ("Heavy snow showers", "🌨️"),
+    95: ("Thunderstorm", "⛈️"),
+    96: ("Thunderstorm, slight hail", "⛈️"),
+    99: ("Thunderstorm, heavy hail", "⛈️"),
+}
+
+
+def _weather_description(code):
+    return WEATHER_CODE_INFO.get(code, ("Unknown", "🌡️"))
+
+
+def _fetch_weather_forecast():
+    """7-day forecast for Galle, Sri Lanka from Open-Meteo (no API key needed),
+    cached in the weather_cache table for WEATHER_CACHE_TTL_MINUTES — Vercel's
+    serverless filesystem can't hold an in-memory cache reliably across
+    invocations, so the cache has to live in the database."""
+    conn = get_connection()
+    row = conn.execute("SELECT * FROM weather_cache WHERE id = 1").fetchone()
+
+    if row:
+        fetched_at = datetime.fromisoformat(row["fetched_at"])
+        age_minutes = (datetime.now(timezone.utc).replace(tzinfo=None) - fetched_at).total_seconds() / 60
+        if age_minutes < WEATHER_CACHE_TTL_MINUTES:
+            return json.loads(row["payload"])
+
+    url = (
+        "https://api.open-meteo.com/v1/forecast"
+        f"?latitude={GALLE_LATITUDE}&longitude={GALLE_LONGITUDE}"
+        "&daily=weathercode,temperature_2m_max,temperature_2m_min,precipitation_sum,"
+        "precipitation_probability_max,windspeed_10m_max"
+        "&current_weather=true&timezone=Asia%2FColombo&forecast_days=7"
+    )
+    try:
+        with urllib.request.urlopen(url, timeout=8) as resp:
+            raw = json.loads(resp.read().decode("utf-8"))
+    except (urllib.error.URLError, ValueError, OSError):
+        # Open-Meteo unreachable — fall back to the last cached forecast (even if
+        # stale) rather than showing nothing.
+        return json.loads(row["payload"]) if row else None
+
+    daily = raw.get("daily", {})
+    days = []
+    for i, day_iso in enumerate(daily.get("time", [])):
+        code = daily.get("weathercode", [])[i] if i < len(daily.get("weathercode", [])) else None
+        label, icon = _weather_description(code)
+        days.append(
+            {
+                "date": day_iso,
+                "description": label,
+                "icon": icon,
+                "temp_max": daily.get("temperature_2m_max", [None] * (i + 1))[i],
+                "temp_min": daily.get("temperature_2m_min", [None] * (i + 1))[i],
+                "precipitation_sum": daily.get("precipitation_sum", [None] * (i + 1))[i],
+                "precipitation_probability_max": daily.get("precipitation_probability_max", [None] * (i + 1))[i],
+                "windspeed_max": daily.get("windspeed_10m_max", [None] * (i + 1))[i],
+            }
+        )
+
+    current = raw.get("current_weather") or {}
+    current_label, current_icon = _weather_description(current.get("weathercode"))
+    payload = {
+        "location": "Galle, Sri Lanka",
+        "current": {
+            "temperature": current.get("temperature"),
+            "windspeed": current.get("windspeed"),
+            "description": current_label,
+            "icon": current_icon,
+            "time": current.get("time"),
+        },
+        "days": days,
+    }
+
+    payload_text = json.dumps(payload)
+    fetched_at_text = _now_text()
+    if row:
+        conn.execute(
+            "UPDATE weather_cache SET fetched_at = ?, payload = ? WHERE id = 1",
+            (fetched_at_text, payload_text),
+        )
+    else:
+        conn.execute(
+            "INSERT INTO weather_cache (id, fetched_at, payload) VALUES (1, ?, ?)",
+            (fetched_at_text, payload_text),
+        )
+    conn.commit()
+    return payload
+
+
+@app.route("/weather")
+def weather_forecast():
+    forecast = _fetch_weather_forecast()
+    return render_template("weather.html", forecast=forecast)
+
+
+# ---------- Birthdays & Announcements (Auto Updates) ----------
+
+
+def _next_birthday_info(date_of_birth, today=None):
+    if not date_of_birth:
+        return None
+    try:
+        dob = date.fromisoformat(date_of_birth)
+    except (ValueError, TypeError):
+        return None
+    today = today or _colombo_today()
+    try:
+        next_bday = dob.replace(year=today.year)
+    except ValueError:
+        # Born on Feb 29 — observe on Feb 28 in non-leap years.
+        next_bday = date(today.year, 2, 28)
+    if next_bday < today:
+        try:
+            next_bday = dob.replace(year=today.year + 1)
+        except ValueError:
+            next_bday = date(today.year + 1, 2, 28)
+    return {
+        "next_date": next_bday.isoformat(),
+        "days_until": (next_bday - today).days,
+        "turning_age": next_bday.year - dob.year,
+    }
+
+
+def _upcoming_birthdays(conn, within_days=30):
+    today = _colombo_today()
+    rows = conn.execute(
+        "SELECT id, full_name, employee_number, date_of_birth FROM employees "
+        "WHERE date_of_birth IS NOT NULL AND date_of_birth != ''"
+    ).fetchall()
+    upcoming = []
+    for e in rows:
+        info = _next_birthday_info(e["date_of_birth"], today)
+        if info and info["days_until"] <= within_days:
+            upcoming.append(
+                {
+                    "id": e["id"],
+                    "full_name": e["full_name"],
+                    "employee_number": e["employee_number"],
+                    **info,
+                }
+            )
+    upcoming.sort(key=lambda x: x["days_until"])
+    return upcoming
+
+
+def _latest_tea_price(conn):
+    today_iso = _colombo_today().isoformat()
+    row = conn.execute("SELECT * FROM daily_prices WHERE date = ?", (today_iso,)).fetchone()
+    if row:
+        return dict(row)
+    row = conn.execute("SELECT * FROM daily_prices ORDER BY date DESC LIMIT 1").fetchone()
+    return dict(row) if row else None
+
+
+@app.route("/announcements/new", methods=["POST"])
+def announcement_new():
+    message = request.form.get("message", "").strip()
+    if not message:
+        flash("Announcement message is required.", "error")
+        return redirect(request.referrer or url_for("dashboard"))
+    conn = get_connection()
+    conn.execute(
+        "INSERT INTO announcements (message, created_by) VALUES (?, ?)",
+        (message, session.get("user_id")),
+    )
+    conn.commit()
+    flash("Announcement posted.", "success")
+    return redirect(request.referrer or url_for("dashboard"))
+
+
+@app.route("/announcements/<int:announcement_id>/delete", methods=["POST"])
+def announcement_delete(announcement_id):
+    conn = get_connection()
+    conn.execute("DELETE FROM announcements WHERE id = ?", (announcement_id,))
+    conn.commit()
+    flash("Announcement removed.", "success")
+    return redirect(request.referrer or url_for("dashboard"))
 
 
 def _ensure_current_cycle(conn):
@@ -2726,7 +3101,7 @@ def invoice_delete_payment(invoice_id, payment_id):
 
 # ---------- Finance & Factory Statement (unified ledger) ----------
 
-TRANSACTION_TYPES = ["Expense", "Payroll", "Salary Advance", "Delivery", "Invoice", "Factory Payment"]
+TRANSACTION_TYPES = ["Expense", "Payroll", "Salary Advance", "Delivery", "Invoice", "Factory Payment", "Depreciation"]
 
 
 def _build_payroll_ledger_entries(conn):
@@ -2811,6 +3186,7 @@ def _build_ledger(conn):
         )
 
     entries.extend(_build_payroll_ledger_entries(conn))
+    entries.extend(_build_depreciation_ledger_entries(conn))
 
     for r in conn.execute(
         """SELECT sa.*, e.full_name, e.employee_number FROM salary_advances sa
@@ -3195,6 +3571,648 @@ def finance_statement_pdf():
         as_attachment=False,
         download_name=f"statement_{data['date_from']}_to_{data['date_to']}.pdf",
     )
+
+
+# ---------- Inventory & Stock Management ----------
+
+
+def _inventory_balance(conn, item_id):
+    row = conn.execute(
+        """SELECT
+               COALESCE(SUM(CASE WHEN transaction_type = 'In' THEN quantity ELSE 0 END), 0) AS stock_in,
+               COALESCE(SUM(CASE WHEN transaction_type = 'Out' THEN quantity ELSE 0 END), 0) AS stock_out
+           FROM inventory_transactions WHERE item_id = ?""",
+        (item_id,),
+    ).fetchone()
+    return round(row["stock_in"] - row["stock_out"], 2)
+
+
+@app.route("/inventory")
+def inventory_list():
+    conn = get_connection()
+    category_filter = request.args.get("category", "").strip()
+
+    query = "SELECT * FROM inventory_items"
+    params = []
+    if category_filter:
+        query += " WHERE category = ?"
+        params.append(category_filter)
+    query += " ORDER BY name"
+    items = [dict(i) for i in conn.execute(query, params).fetchall()]
+
+    total_valuation = 0
+    low_stock_count = 0
+    for item in items:
+        item["balance"] = _inventory_balance(conn, item["id"])
+        item["valuation"] = round(item["balance"] * item["unit_cost"], 2)
+        item["low_stock"] = item["balance"] < item["minimum_stock_level"]
+        total_valuation += item["valuation"]
+        if item["low_stock"]:
+            low_stock_count += 1
+
+    return render_template(
+        "inventory.html",
+        items=items,
+        category_filter=category_filter,
+        total_valuation=round(total_valuation, 2),
+        low_stock_count=low_stock_count,
+    )
+
+
+@app.route("/inventory/items/new", methods=["GET", "POST"])
+def inventory_item_new():
+    if request.method == "POST":
+        name = request.form.get("name", "").strip()
+        category = request.form.get("category", "").strip()
+        unit = request.form.get("unit", "").strip()
+        min_level_value = request.form.get("minimum_stock_level", "").strip()
+        unit_cost_value = request.form.get("unit_cost", "").strip()
+
+        if not name or category not in INVENTORY_CATEGORIES or not unit:
+            flash("Name, a valid category, and a unit are required.", "error")
+            return render_template("inventory_item_form.html", item=request.form, mode="new")
+        try:
+            minimum_stock_level = float(min_level_value) if min_level_value else 0
+            unit_cost = float(unit_cost_value) if unit_cost_value else 0
+        except ValueError:
+            flash("Minimum stock level and unit cost must be numbers.", "error")
+            return render_template("inventory_item_form.html", item=request.form, mode="new")
+
+        conn = get_connection()
+        conn.execute(
+            """INSERT INTO inventory_items (name, category, unit, minimum_stock_level, unit_cost, created_by)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (name, category, unit, minimum_stock_level, unit_cost, session.get("user_id")),
+        )
+        conn.commit()
+        flash(f"{name} added to inventory.", "success")
+        return redirect(url_for("inventory_list"))
+
+    return render_template("inventory_item_form.html", item={}, mode="new")
+
+
+@app.route("/inventory/items/<int:item_id>/edit", methods=["GET", "POST"])
+def inventory_item_edit(item_id):
+    conn = get_connection()
+    item = conn.execute("SELECT * FROM inventory_items WHERE id = ?", (item_id,)).fetchone()
+    if not item:
+        flash("Inventory item not found.", "error")
+        return redirect(url_for("inventory_list"))
+
+    if request.method == "POST":
+        name = request.form.get("name", "").strip()
+        category = request.form.get("category", "").strip()
+        unit = request.form.get("unit", "").strip()
+        min_level_value = request.form.get("minimum_stock_level", "").strip()
+        unit_cost_value = request.form.get("unit_cost", "").strip()
+
+        if not name or category not in INVENTORY_CATEGORIES or not unit:
+            flash("Name, a valid category, and a unit are required.", "error")
+            merged = dict(item)
+            merged.update(request.form)
+            return render_template("inventory_item_form.html", item=merged, mode="edit", item_id=item_id)
+        try:
+            minimum_stock_level = float(min_level_value) if min_level_value else 0
+            unit_cost = float(unit_cost_value) if unit_cost_value else 0
+        except ValueError:
+            flash("Minimum stock level and unit cost must be numbers.", "error")
+            merged = dict(item)
+            merged.update(request.form)
+            return render_template("inventory_item_form.html", item=merged, mode="edit", item_id=item_id)
+
+        conn.execute(
+            """UPDATE inventory_items SET name=?, category=?, unit=?, minimum_stock_level=?, unit_cost=?, updated_at=?
+               WHERE id=?""",
+            (name, category, unit, minimum_stock_level, unit_cost, _now_text(), item_id),
+        )
+        conn.commit()
+        flash("Inventory item updated.", "success")
+        return redirect(url_for("inventory_list"))
+
+    return render_template("inventory_item_form.html", item=dict(item), mode="edit", item_id=item_id)
+
+
+@app.route("/inventory/items/<int:item_id>")
+def inventory_item_detail(item_id):
+    conn = get_connection()
+    item = conn.execute("SELECT * FROM inventory_items WHERE id = ?", (item_id,)).fetchone()
+    if not item:
+        flash("Inventory item not found.", "error")
+        return redirect(url_for("inventory_list"))
+
+    transactions = conn.execute(
+        "SELECT * FROM inventory_transactions WHERE item_id = ? ORDER BY transaction_date DESC, id DESC", (item_id,)
+    ).fetchall()
+    balance = _inventory_balance(conn, item_id)
+    valuation = round(balance * item["unit_cost"], 2)
+
+    return render_template(
+        "inventory_item_detail.html", item=item, transactions=transactions, balance=balance, valuation=valuation
+    )
+
+
+@app.route("/inventory/items/<int:item_id>/transaction", methods=["POST"])
+def inventory_transaction_new(item_id):
+    conn = get_connection()
+    item = conn.execute("SELECT * FROM inventory_items WHERE id = ?", (item_id,)).fetchone()
+    if not item:
+        flash("Inventory item not found.", "error")
+        return redirect(url_for("inventory_list"))
+
+    transaction_type = request.form.get("transaction_type", "").strip()
+    quantity_value = request.form.get("quantity", "").strip()
+    transaction_date = request.form.get("transaction_date", "").strip()
+    unit_cost_value = request.form.get("unit_cost", "").strip()
+    supplier = request.form.get("supplier", "").strip() or None
+    batch_number = request.form.get("batch_number", "").strip() or None
+    expiry_date = request.form.get("expiry_date", "").strip() or None
+    note = request.form.get("note", "").strip() or None
+
+    if transaction_type not in INVENTORY_TRANSACTION_TYPES or not transaction_date:
+        flash("A valid transaction type and date are required.", "error")
+        return redirect(url_for("inventory_item_detail", item_id=item_id))
+
+    try:
+        quantity = float(quantity_value)
+        unit_cost = float(unit_cost_value) if unit_cost_value else None
+    except ValueError:
+        flash("Quantity and unit cost must be numbers.", "error")
+        return redirect(url_for("inventory_item_detail", item_id=item_id))
+
+    if quantity <= 0:
+        flash("Quantity must be greater than zero.", "error")
+        return redirect(url_for("inventory_item_detail", item_id=item_id))
+
+    if transaction_type == "Out":
+        current_balance = _inventory_balance(conn, item_id)
+        if quantity > current_balance:
+            flash(f"Cannot remove {quantity} {item['unit']} — only {current_balance} in stock.", "error")
+            return redirect(url_for("inventory_item_detail", item_id=item_id))
+
+    conn.execute(
+        """INSERT INTO inventory_transactions
+           (item_id, transaction_type, quantity, unit_cost, supplier, batch_number, expiry_date,
+            transaction_date, note, created_by)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            item_id, transaction_type, quantity, unit_cost, supplier, batch_number, expiry_date,
+            transaction_date, note, session.get("user_id"),
+        ),
+    )
+    if transaction_type == "In" and unit_cost is not None:
+        conn.execute(
+            "UPDATE inventory_items SET unit_cost = ?, updated_at = ? WHERE id = ?",
+            (unit_cost, _now_text(), item_id),
+        )
+    conn.commit()
+    flash(f"Stock {transaction_type.lower()} of {quantity} {item['unit']} recorded.", "success")
+    return redirect(url_for("inventory_item_detail", item_id=item_id))
+
+
+@app.route("/inventory/items/<int:item_id>/delete", methods=["POST"])
+def inventory_item_delete(item_id):
+    conn = get_connection()
+    conn.execute("DELETE FROM inventory_items WHERE id = ?", (item_id,))
+    conn.commit()
+    flash("Inventory item removed.", "success")
+    return redirect(url_for("inventory_list"))
+
+
+@app.route("/inventory/transactions")
+def inventory_transaction_list():
+    conn = get_connection()
+    rows = conn.execute(
+        """SELECT t.*, i.name AS item_name, i.unit AS item_unit FROM inventory_transactions t
+           JOIN inventory_items i ON i.id = t.item_id
+           ORDER BY t.transaction_date DESC, t.id DESC LIMIT 500"""
+    ).fetchall()
+    return render_template("inventory_transactions.html", transactions=rows)
+
+
+# ---------- Asset & Equipment Register ----------
+
+
+def _months_between(start_date, end_date):
+    """Whole calendar months elapsed from start_date to end_date (0 if end is before start)."""
+    if end_date < start_date:
+        return 0
+    months = (end_date.year - start_date.year) * 12 + (end_date.month - start_date.month)
+    if end_date.day < start_date.day:
+        months -= 1
+    return max(0, months)
+
+
+def _asset_depreciation(asset, as_of=None):
+    """Straight-line depreciation as of a given date (defaults to today). Returns
+    None if the asset doesn't have enough information to depreciate (no cost,
+    no purchase date, or no depreciation period set)."""
+    if not asset["purchase_cost"] or not asset["purchase_date"] or not asset["depreciation_period_months"]:
+        return None
+
+    as_of = as_of or _colombo_today()
+    purchase_date = date.fromisoformat(asset["purchase_date"])
+    depreciable_amount = asset["purchase_cost"] - (asset["salvage_value"] or 0)
+    monthly_amount = round(depreciable_amount / asset["depreciation_period_months"], 2)
+    months_elapsed = min(_months_between(purchase_date, as_of), asset["depreciation_period_months"])
+    accumulated = round(monthly_amount * months_elapsed, 2)
+    book_value = round(asset["purchase_cost"] - accumulated, 2)
+    fully_depreciated = months_elapsed >= asset["depreciation_period_months"]
+
+    return {
+        "monthly_amount": monthly_amount,
+        "months_elapsed": months_elapsed,
+        "accumulated": accumulated,
+        "book_value": book_value,
+        "fully_depreciated": fully_depreciated,
+    }
+
+
+def _add_months(d, n):
+    month_index = d.month - 1 + n
+    year = d.year + month_index // 12
+    month = month_index % 12 + 1
+    day = min(d.day, calendar.monthrange(year, month)[1])
+    return date(year, month, day)
+
+
+def _step_months_for_period(period_type):
+    return {"Monthly": 1, "Quarterly": 3, "Yearly": 12}.get(period_type, 1)
+
+
+def _build_depreciation_ledger_entries(conn):
+    """Straight-line depreciation for registered assets, plus amortization of
+    standalone prepaid expenses (e.g. a bulk fertilizer purchase covering
+    several months' worth of use) — one Depreciation debit entry per elapsed
+    period, so each period's expense is recognized only once it's actually
+    due, e.g. a 3-month fertilizer purchase allocates one third of its cost
+    as an expense each month rather than all at once on the purchase date."""
+    entries = []
+    today = _colombo_today()
+
+    assets = conn.execute(
+        """SELECT * FROM assets
+           WHERE purchase_cost IS NOT NULL AND purchase_date IS NOT NULL
+             AND depreciation_period_months IS NOT NULL AND depreciation_period_months > 0"""
+    ).fetchall()
+    for a in assets:
+        purchase_date = date.fromisoformat(a["purchase_date"])
+        depreciable_amount = (a["purchase_cost"] or 0) - (a["salvage_value"] or 0)
+        if depreciable_amount <= 0:
+            continue
+        monthly_amount = round(depreciable_amount / a["depreciation_period_months"], 2)
+        months_elapsed = min(_months_between(purchase_date, today), a["depreciation_period_months"])
+        for i in range(1, months_elapsed + 1):
+            period_date = _add_months(purchase_date, i)
+            entries.append(
+                {
+                    "date": period_date.isoformat(),
+                    "type": "Depreciation",
+                    "reference_no": f"DEP-AST-{a['id']}-{i}",
+                    "description": (
+                        f"Depreciation — {a['name']} ({a['asset_code']}), "
+                        f"month {i} of {a['depreciation_period_months']}"
+                    ),
+                    "debit": monthly_amount,
+                    "credit": 0,
+                    "payment_method": None,
+                    "user": None,
+                    "factory": None,
+                    "factory_id": None,
+                    "employee": None,
+                    "employee_id": None,
+                    "status": None,
+                }
+            )
+
+    prepaid_rows = conn.execute("SELECT * FROM prepaid_expenses").fetchall()
+    for p in prepaid_rows:
+        if p["period_count"] <= 0 or p["total_cost"] <= 0:
+            continue
+        start_date = date.fromisoformat(p["start_date"])
+        step = _step_months_for_period(p["period_type"])
+        per_period = round(p["total_cost"] / p["period_count"], 2)
+        periods_elapsed = min(_months_between(start_date, today) // step, p["period_count"])
+        for i in range(1, periods_elapsed + 1):
+            period_date = _add_months(start_date, i * step)
+            entries.append(
+                {
+                    "date": period_date.isoformat(),
+                    "type": "Depreciation",
+                    "reference_no": f"DEP-PPD-{p['id']}-{i}",
+                    "description": f"Amortization — {p['description']}, period {i} of {p['period_count']}",
+                    "debit": per_period,
+                    "credit": 0,
+                    "payment_method": None,
+                    "user": None,
+                    "factory": None,
+                    "factory_id": None,
+                    "employee": None,
+                    "employee_id": None,
+                    "status": None,
+                }
+            )
+    return entries
+
+
+@app.route("/assets")
+def asset_list():
+    conn = get_connection()
+    status_filter = request.args.get("status", "").strip()
+
+    query = """SELECT a.*, e.full_name AS assigned_employee_name FROM assets a
+               LEFT JOIN employees e ON e.id = a.assigned_employee_id"""
+    params = []
+    if status_filter in ASSET_STATUSES:
+        query += " WHERE a.status = ?"
+        params.append(status_filter)
+    query += " ORDER BY a.name"
+    assets = [dict(a) for a in conn.execute(query, params).fetchall()]
+
+    total_book_value = 0
+    for asset in assets:
+        dep = _asset_depreciation(asset)
+        asset["book_value"] = dep["book_value"] if dep else asset["purchase_cost"]
+        total_book_value += asset["book_value"] or 0
+
+    return render_template(
+        "assets.html", assets=assets, status_filter=status_filter, total_book_value=round(total_book_value, 2)
+    )
+
+
+@app.route("/assets/new", methods=["GET", "POST"])
+def asset_new():
+    conn = get_connection()
+    employees = conn.execute("SELECT id, employee_number, full_name FROM employees ORDER BY full_name").fetchall()
+
+    if request.method == "POST":
+        name = request.form.get("name", "").strip()
+        if not name:
+            flash("Asset name is required.", "error")
+            return render_template("asset_form.html", asset=request.form, mode="new", employees=employees)
+
+        data = {
+            "category": request.form.get("category", "").strip() or None,
+            "purchase_date": request.form.get("purchase_date", "").strip() or None,
+            "supplier": request.form.get("supplier", "").strip() or None,
+            "serial_number": request.form.get("serial_number", "").strip() or None,
+            "assigned_location": request.form.get("assigned_location", "").strip() or None,
+            "assigned_employee_id": request.form.get("assigned_employee_id", "").strip() or None,
+            "warranty_expiry": request.form.get("warranty_expiry", "").strip() or None,
+            "service_schedule": request.form.get("service_schedule", "").strip() or None,
+            "next_service_date": request.form.get("next_service_date", "").strip() or None,
+            "status": request.form.get("status", "").strip() or "Active",
+        }
+        try:
+            purchase_cost_value = request.form.get("purchase_cost", "").strip()
+            salvage_value_value = request.form.get("salvage_value", "").strip()
+            period_value = request.form.get("depreciation_period_months", "").strip()
+            data["purchase_cost"] = float(purchase_cost_value) if purchase_cost_value else None
+            data["salvage_value"] = float(salvage_value_value) if salvage_value_value else 0
+            data["depreciation_period_months"] = int(period_value) if period_value else None
+        except ValueError:
+            flash("Purchase cost, salvage value, and depreciation period must be numbers.", "error")
+            return render_template("asset_form.html", asset=request.form, mode="new", employees=employees)
+
+        cursor = conn.execute(
+            """INSERT INTO assets
+               (asset_code, name, category, purchase_date, purchase_cost, salvage_value, supplier, serial_number,
+                assigned_location, assigned_employee_id, warranty_expiry, service_schedule, next_service_date,
+                status, depreciation_period_months, created_by)
+               VALUES ('', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                name, data["category"], data["purchase_date"], data["purchase_cost"], data["salvage_value"],
+                data["supplier"], data["serial_number"], data["assigned_location"], data["assigned_employee_id"],
+                data["warranty_expiry"], data["service_schedule"], data["next_service_date"], data["status"],
+                data["depreciation_period_months"], session.get("user_id"),
+            ),
+        )
+        asset_code = f"AST-{cursor.lastrowid:04d}"
+        conn.execute("UPDATE assets SET asset_code = ? WHERE id = ?", (asset_code, cursor.lastrowid))
+        conn.commit()
+        flash(f"Asset {asset_code} registered.", "success")
+        return redirect(url_for("asset_list"))
+
+    return render_template("asset_form.html", asset={}, mode="new", employees=employees)
+
+
+@app.route("/assets/<int:asset_id>/edit", methods=["GET", "POST"])
+def asset_edit(asset_id):
+    conn = get_connection()
+    asset = conn.execute("SELECT * FROM assets WHERE id = ?", (asset_id,)).fetchone()
+    if not asset:
+        flash("Asset not found.", "error")
+        return redirect(url_for("asset_list"))
+    employees = conn.execute("SELECT id, employee_number, full_name FROM employees ORDER BY full_name").fetchall()
+
+    if request.method == "POST":
+        name = request.form.get("name", "").strip()
+        if not name:
+            flash("Asset name is required.", "error")
+            merged = dict(asset)
+            merged.update(request.form)
+            return render_template("asset_form.html", asset=merged, mode="edit", asset_id=asset_id, employees=employees)
+
+        data = {
+            "category": request.form.get("category", "").strip() or None,
+            "purchase_date": request.form.get("purchase_date", "").strip() or None,
+            "supplier": request.form.get("supplier", "").strip() or None,
+            "serial_number": request.form.get("serial_number", "").strip() or None,
+            "assigned_location": request.form.get("assigned_location", "").strip() or None,
+            "assigned_employee_id": request.form.get("assigned_employee_id", "").strip() or None,
+            "warranty_expiry": request.form.get("warranty_expiry", "").strip() or None,
+            "service_schedule": request.form.get("service_schedule", "").strip() or None,
+            "next_service_date": request.form.get("next_service_date", "").strip() or None,
+            "status": request.form.get("status", "").strip() or "Active",
+        }
+        try:
+            purchase_cost_value = request.form.get("purchase_cost", "").strip()
+            salvage_value_value = request.form.get("salvage_value", "").strip()
+            period_value = request.form.get("depreciation_period_months", "").strip()
+            data["purchase_cost"] = float(purchase_cost_value) if purchase_cost_value else None
+            data["salvage_value"] = float(salvage_value_value) if salvage_value_value else 0
+            data["depreciation_period_months"] = int(period_value) if period_value else None
+        except ValueError:
+            flash("Purchase cost, salvage value, and depreciation period must be numbers.", "error")
+            merged = dict(asset)
+            merged.update(request.form)
+            return render_template("asset_form.html", asset=merged, mode="edit", asset_id=asset_id, employees=employees)
+
+        conn.execute(
+            """UPDATE assets SET name=?, category=?, purchase_date=?, purchase_cost=?, salvage_value=?, supplier=?,
+                   serial_number=?, assigned_location=?, assigned_employee_id=?, warranty_expiry=?,
+                   service_schedule=?, next_service_date=?, status=?, depreciation_period_months=?, updated_at=?
+               WHERE id=?""",
+            (
+                name, data["category"], data["purchase_date"], data["purchase_cost"], data["salvage_value"],
+                data["supplier"], data["serial_number"], data["assigned_location"], data["assigned_employee_id"],
+                data["warranty_expiry"], data["service_schedule"], data["next_service_date"], data["status"],
+                data["depreciation_period_months"], _now_text(), asset_id,
+            ),
+        )
+        conn.commit()
+        flash("Asset updated.", "success")
+        return redirect(url_for("asset_list"))
+
+    return render_template("asset_form.html", asset=dict(asset), mode="edit", asset_id=asset_id, employees=employees)
+
+
+@app.route("/assets/<int:asset_id>")
+def asset_detail(asset_id):
+    conn = get_connection()
+    asset = conn.execute(
+        """SELECT a.*, e.full_name AS assigned_employee_name FROM assets a
+           LEFT JOIN employees e ON e.id = a.assigned_employee_id WHERE a.id = ?""",
+        (asset_id,),
+    ).fetchone()
+    if not asset:
+        flash("Asset not found.", "error")
+        return redirect(url_for("asset_list"))
+
+    maintenance_log = conn.execute(
+        "SELECT * FROM asset_maintenance_log WHERE asset_id = ? ORDER BY maintenance_date DESC, id DESC", (asset_id,)
+    ).fetchall()
+    depreciation = _asset_depreciation(asset)
+
+    return render_template(
+        "asset_detail.html", asset=asset, maintenance_log=maintenance_log, depreciation=depreciation
+    )
+
+
+@app.route("/assets/<int:asset_id>/maintenance", methods=["POST"])
+def asset_maintenance_new(asset_id):
+    conn = get_connection()
+    asset = conn.execute("SELECT * FROM assets WHERE id = ?", (asset_id,)).fetchone()
+    if not asset:
+        flash("Asset not found.", "error")
+        return redirect(url_for("asset_list"))
+
+    maintenance_date = request.form.get("maintenance_date", "").strip()
+    description = request.form.get("description", "").strip()
+    cost_value = request.form.get("cost", "").strip()
+    performed_by = request.form.get("performed_by", "").strip() or None
+    next_service_date = request.form.get("next_service_date", "").strip() or None
+
+    if not maintenance_date or not description:
+        flash("Maintenance date and description are required.", "error")
+        return redirect(url_for("asset_detail", asset_id=asset_id))
+    try:
+        cost = float(cost_value) if cost_value else None
+    except ValueError:
+        flash("Cost must be a number.", "error")
+        return redirect(url_for("asset_detail", asset_id=asset_id))
+
+    conn.execute(
+        """INSERT INTO asset_maintenance_log (asset_id, maintenance_date, description, cost, performed_by,
+               next_service_date, created_by)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (asset_id, maintenance_date, description, cost, performed_by, next_service_date, session.get("user_id")),
+    )
+    if next_service_date:
+        conn.execute("UPDATE assets SET next_service_date = ? WHERE id = ?", (next_service_date, asset_id))
+    conn.commit()
+    flash("Maintenance record added.", "success")
+    return redirect(url_for("asset_detail", asset_id=asset_id))
+
+
+@app.route("/assets/<int:asset_id>/delete", methods=["POST"])
+def asset_delete(asset_id):
+    conn = get_connection()
+    conn.execute("DELETE FROM assets WHERE id = ?", (asset_id,))
+    conn.commit()
+    flash("Asset removed.", "success")
+    return redirect(url_for("asset_list"))
+
+
+# ---------- Depreciation & Amortization ----------
+
+
+@app.route("/finance/depreciation")
+def depreciation_list():
+    conn = get_connection()
+    today = _colombo_today()
+
+    assets = conn.execute(
+        """SELECT * FROM assets
+           WHERE purchase_cost IS NOT NULL AND purchase_date IS NOT NULL AND depreciation_period_months IS NOT NULL
+           ORDER BY name"""
+    ).fetchall()
+    asset_rows = []
+    total_monthly = 0
+    for a in assets:
+        dep = _asset_depreciation(a, today)
+        if not dep:
+            continue
+        asset_rows.append({"asset": a, "dep": dep})
+        if not dep["fully_depreciated"]:
+            total_monthly += dep["monthly_amount"]
+
+    prepaid_rows = []
+    for p in conn.execute("SELECT * FROM prepaid_expenses ORDER BY start_date DESC").fetchall():
+        start_date = date.fromisoformat(p["start_date"])
+        step = _step_months_for_period(p["period_type"])
+        per_period = round(p["total_cost"] / p["period_count"], 2) if p["period_count"] else 0
+        periods_elapsed = min(_months_between(start_date, today) // step, p["period_count"])
+        accumulated = round(per_period * periods_elapsed, 2)
+        remaining = round(p["total_cost"] - accumulated, 2)
+        prepaid_rows.append(
+            {
+                "prepaid": p,
+                "per_period": per_period,
+                "periods_elapsed": periods_elapsed,
+                "accumulated": accumulated,
+                "remaining": remaining,
+                "fully_amortized": periods_elapsed >= p["period_count"],
+            }
+        )
+
+    return render_template(
+        "depreciation.html",
+        asset_rows=asset_rows,
+        prepaid_rows=prepaid_rows,
+        total_monthly=round(total_monthly, 2),
+    )
+
+
+@app.route("/finance/depreciation/new", methods=["POST"])
+def prepaid_expense_new():
+    description = request.form.get("description", "").strip()
+    category = request.form.get("category", "").strip() or None
+    total_cost_value = request.form.get("total_cost", "").strip()
+    start_date_value = request.form.get("start_date", "").strip()
+    period_type = request.form.get("period_type", "").strip()
+    period_count_value = request.form.get("period_count", "").strip()
+
+    if not description or not start_date_value or period_type not in DEPRECIATION_PERIOD_TYPES:
+        flash("Description, start date, and a valid period type are required.", "error")
+        return redirect(url_for("depreciation_list"))
+    try:
+        total_cost = float(total_cost_value)
+        period_count = int(period_count_value)
+    except ValueError:
+        flash("Total cost and number of periods must be numbers.", "error")
+        return redirect(url_for("depreciation_list"))
+    if total_cost <= 0 or period_count <= 0:
+        flash("Total cost and number of periods must be greater than zero.", "error")
+        return redirect(url_for("depreciation_list"))
+
+    conn = get_connection()
+    conn.execute(
+        """INSERT INTO prepaid_expenses (description, category, total_cost, start_date, period_type, period_count, created_by)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (description, category, total_cost, start_date_value, period_type, period_count, session.get("user_id")),
+    )
+    conn.commit()
+    flash(f"Prepaid expense '{description}' will amortize over {period_count} {period_type.lower()} period(s).", "success")
+    return redirect(url_for("depreciation_list"))
+
+
+@app.route("/finance/depreciation/<int:prepaid_id>/delete", methods=["POST"])
+def prepaid_expense_delete(prepaid_id):
+    conn = get_connection()
+    conn.execute("DELETE FROM prepaid_expenses WHERE id = ?", (prepaid_id,))
+    conn.commit()
+    flash("Prepaid expense schedule removed.", "success")
+    return redirect(url_for("depreciation_list"))
 
 
 if __name__ == "__main__":

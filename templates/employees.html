@@ -14,6 +14,30 @@
   <button class="btn btn-secondary" type="submit">Search</button>
 </form>
 
+{% if upcoming_birthdays %}
+<div class="panel" style="border-color: var(--tea-green);">
+  <h2>🎂 Upcoming Birthdays</h2>
+  <table>
+    <thead><tr><th>Employee</th><th>Birthday</th><th>Turning</th><th></th></tr></thead>
+    <tbody>
+      {% for b in upcoming_birthdays %}
+      <tr>
+        <td><a href="{{ url_for('employee_edit', employee_id=b['id']) }}">{{ b['full_name'] }}</a> <small>({{ b['employee_number'] }})</small></td>
+        <td>{{ b['next_date']|lk_date }}</td>
+        <td>{{ b['turning_age'] }}</td>
+        <td>
+          {% if b['days_until'] == 0 %}<span class="badge badge-present">Today!</span>
+          {% elif b['days_until'] <= 7 %}<span class="badge badge-pending">In {{ b['days_until'] }} day{{ 's' if b['days_until'] != 1 else '' }}</span>
+          {% else %}<span class="badge badge-in-progress">In {{ b['days_until'] }} days</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
 <div class="panel">
   {% if employees %}
   <table>

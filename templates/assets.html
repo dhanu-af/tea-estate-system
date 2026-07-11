@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block title %}Asset & Equipment Register · DKNS Tea Lands{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Asset &amp; Equipment Register</h1>
+    <p class="subtitle">Company assets and equipment, with depreciation, maintenance history, and assignment tracking.</p>
+  </div>
+  <a class="btn" href="{{ url_for('asset_new') }}">Register Asset</a>
+</div>
+
+<div class="cards">
+  <div class="card">
+    <div class="stat">{{ assets|length }}</div>
+    <div class="label">Assets registered</div>
+  </div>
+  <div class="card">
+    <div class="stat">{{ total_book_value }}</div>
+    <div class="label">Total book value</div>
+  </div>
+</div>
+
+<form class="search-bar" method="get">
+  <select name="status">
+    <option value="">All statuses</option>
+    {% for s in asset_statuses %}
+    <option value="{{ s }}" {{ 'selected' if status_filter == s }}>{{ s }}</option>
+    {% endfor %}
+  </select>
+  <button class="btn btn-secondary" type="submit">Filter</button>
+  {% if status_filter %}<a class="btn btn-secondary" href="{{ url_for('asset_list') }}">Clear</a>{% endif %}
+</form>
+
+<div class="panel">
+  {% if assets %}
+  <table>
+    <thead>
+      <tr>
+        <th>Asset ID</th><th>Name</th><th>Category</th><th>Purchase Date</th><th>Cost</th>
+        <th>Book Value</th><th>Assigned To</th><th>Status</th><th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for a in assets %}
+      <tr>
+        <td><a href="{{ url_for('asset_detail', asset_id=a['id']) }}">{{ a['asset_code'] }}</a></td>
+        <td>{{ a['name'] }}</td>
+        <td>{{ a['category'] or '—' }}</td>
+        <td>{{ a['purchase_date'] or '—' }}</td>
+        <td>{{ a['purchase_cost'] if a['purchase_cost'] is not none else '—' }}</td>
+        <td>{{ a['book_value'] if a['book_value'] is not none else '—' }}</td>
+        <td>
+          {% if a['assigned_employee_name'] %}{{ a['assigned_employee_name'] }}{% elif a['assigned_location'] %}{{ a['assigned_location'] }}{% else %}—{% endif %}
+        </td>
+        <td><span class="badge {{ 'badge-present' if a['status'] == 'Active' else 'badge-in-progress' if a['status'] == 'Under Repair' else 'badge-pending' }}">{{ a['status'] }}</span></td>
+        <td style="display:flex; gap:8px;">
+          <a class="btn btn-secondary btn-sm" href="{{ url_for('asset_edit', asset_id=a['id']) }}">Edit</a>
+          <form method="post" action="{{ url_for('asset_delete', asset_id=a['id']) }}" onsubmit="return confirm('Delete {{ a['name'] }}?');">
+            <button class="btn btn-danger btn-sm" type="submit">Delete</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty-state">No assets registered yet.</div>
+  {% endif %}
+</div>
+{% endblock %}

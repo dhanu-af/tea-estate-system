@@ -32,6 +32,78 @@
   </div>
 </div>
 
+{% if session.get('role') == 'Admin' %}
+<div class="panel">
+  <h2>📢 Post Announcement</h2>
+  <form method="post" action="{{ url_for('announcement_new') }}" style="display:flex; gap:8px;">
+    <input type="text" name="message" placeholder="Post an announcement for all staff..." style="flex:1;" required>
+    <button class="btn btn-sm" type="submit">Post</button>
+  </form>
+</div>
+{% endif %}
+
+<div class="panel" id="auto-updates" data-live-refresh>
+  <h2>Auto Updates</h2>
+  <div class="cards" style="margin-top:0;">
+    <div class="card">
+      <div class="stat">{{ tea_price['price_per_kg'] if tea_price else '—' }}</div>
+      <div class="label">Tea price / kg {{ ('(' ~ (tea_price['date']|lk_date) ~ ')') if tea_price else '(not set yet)' }}</div>
+    </div>
+    <div class="card">
+      {% if weather %}
+      <div class="stat">{{ weather['current']['icon'] }} {{ weather['current']['temperature'] }}&deg;C</div>
+      <div class="label">Galle weather now &middot; {{ weather['current']['description'] }} &middot; <a href="{{ url_for('weather_forecast') }}">7-day forecast</a></div>
+      {% else %}
+      <div class="stat">—</div>
+      <div class="label">Weather temporarily unavailable</div>
+      {% endif %}
+    </div>
+    <div class="card">
+      <div class="stat">{{ upcoming_birthdays|length }}</div>
+      <div class="label">Upcoming birthdays (30 days)</div>
+    </div>
+  </div>
+
+  <div style="display:grid; grid-template-columns: 1fr 1fr; gap:16px; margin-top:16px;">
+    <div>
+      <h3>🎂 Birthday Reminders</h3>
+      {% if upcoming_birthdays %}
+      <ul style="list-style:none; padding:0; margin:0;">
+        {% for b in upcoming_birthdays[:5] %}
+        <li style="padding:6px 0; border-bottom:1px solid var(--border);">
+          <a href="{{ url_for('employee_edit', employee_id=b['id']) }}">{{ b['full_name'] }}</a>
+          &middot; {{ b['next_date']|lk_date }}
+          {% if b['days_until'] == 0 %}<span class="badge badge-present">Today!</span>
+          {% else %}<span class="badge badge-in-progress">in {{ b['days_until'] }}d</span>{% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <div class="empty-state">No birthdays in the next 30 days.</div>
+      {% endif %}
+    </div>
+    <div>
+      <h3>📢 Announcements</h3>
+      {% if announcements %}
+      <ul style="list-style:none; padding:0; margin:0;">
+        {% for a in announcements %}
+        <li style="padding:6px 0; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; gap:8px;">
+          <span>{{ a['message'] }} <small style="color:var(--muted);">— {{ a['created_by_name'] or 'System' }}, {{ a['created_at'][:10]|lk_date }}</small></span>
+          {% if session.get('role') == 'Admin' %}
+          <form method="post" action="{{ url_for('announcement_delete', announcement_id=a['id']) }}" onsubmit="return confirm('Remove this announcement?');">
+            <button class="btn btn-danger btn-sm" type="submit">×</button>
+          </form>
+          {% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <div class="empty-state">No announcements right now.</div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
 <div class="panel chart-panel">
   <h2>7-day trend — harvest &amp; attendance</h2>
   <canvas id="trendChart" height="90"></canvas>

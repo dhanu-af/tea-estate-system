@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Edit' if mode == 'edit' else 'Register' }} Asset · DKNS Tea Lands{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>{{ 'Edit' if mode == 'edit' else 'Register' }} Asset</h1>
+  </div>
+</div>
+
+<div class="panel">
+  <form method="post" action="{{ url_for('asset_edit', asset_id=asset_id) if mode == 'edit' else url_for('asset_new') }}" class="form-grid">
+    <div class="field">
+      <label>Name</label>
+      <input type="text" name="name" value="{{ asset.get('name') or '' }}" required>
+    </div>
+    <div class="field">
+      <label>Category</label>
+      <input type="text" name="category" value="{{ asset.get('category') or '' }}" placeholder="e.g. Vehicle, Machinery, Tool">
+    </div>
+    <div class="field">
+      <label>Purchase Date</label>
+      <input type="date" name="purchase_date" value="{{ asset.get('purchase_date') or '' }}">
+    </div>
+    <div class="field">
+      <label>Purchase Cost</label>
+      <input type="number" step="0.01" min="0" name="purchase_cost" value="{{ asset.get('purchase_cost') if asset.get('purchase_cost') is not none else '' }}">
+    </div>
+    <div class="field">
+      <label>Salvage Value</label>
+      <input type="number" step="0.01" min="0" name="salvage_value" value="{{ asset.get('salvage_value') if asset.get('salvage_value') is not none else '' }}" placeholder="0.00">
+    </div>
+    <div class="field">
+      <label>Depreciation Period (months)</label>
+      <input type="number" step="1" min="1" name="depreciation_period_months" value="{{ asset.get('depreciation_period_months') if asset.get('depreciation_period_months') is not none else '' }}" placeholder="e.g. 60 for 5 years">
+    </div>
+    <div class="field">
+      <label>Supplier</label>
+      <input type="text" name="supplier" value="{{ asset.get('supplier') or '' }}">
+    </div>
+    <div class="field">
+      <label>Serial Number</label>
+      <input type="text" name="serial_number" value="{{ asset.get('serial_number') or '' }}">
+    </div>
+    <div class="field">
+      <label>Assigned Location</label>
+      <input type="text" name="assigned_location" value="{{ asset.get('assigned_location') or '' }}">
+    </div>
+    <div class="field">
+      <label>Assigned Employee</label>
+      <select name="assigned_employee_id">
+        <option value="">Unassigned</option>
+        {% for e in employees %}
+        <option value="{{ e['id'] }}" {{ 'selected' if asset.get('assigned_employee_id')|string == e['id']|string }}>{{ e['full_name'] }} ({{ e['employee_number'] }})</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="field">
+      <label>Warranty Expiry</label>
+      <input type="date" name="warranty_expiry" value="{{ asset.get('warranty_expiry') or '' }}">
+    </div>
+    <div class="field">
+      <label>Service Schedule</label>
+      <input type="text" name="service_schedule" value="{{ asset.get('service_schedule') or '' }}" placeholder="e.g. Every 6 months">
+    </div>
+    <div class="field">
+      <label>Next Service Date</label>
+      <input type="date" name="next_service_date" value="{{ asset.get('next_service_date') or '' }}">
+    </div>
+    <div class="field">
+      <label>Status</label>
+      <select name="status">
+        {% for s in asset_statuses %}
+        <option value="{{ s }}" {{ 'selected' if asset.get('status') == s or (not asset.get('status') and s == 'Active') }}>{{ s }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="field" style="align-self:end;">
+      <button class="btn" type="submit">{{ 'Save Changes' if mode == 'edit' else 'Register Asset' }}</button>
+      <a class="btn btn-secondary" href="{{ url_for('asset_list') }}">Cancel</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

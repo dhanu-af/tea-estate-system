@@ -1,0 +1,126 @@
+{% extends "base.html" %}
+{% block title %}Depreciation & Amortization · DKNS Tea Lands{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Depreciation &amp; Amortization</h1>
+    <p class="subtitle">Straight-line depreciation for registered assets, plus amortization of prepaid expenses (e.g. a bulk fertilizer purchase spread over its useful months). Entries post automatically into the Finance &amp; Factory Statement as they come due.</p>
+  </div>
+  <a class="btn btn-secondary" href="{{ url_for('asset_list') }}">Asset Register</a>
+</div>
+
+<div class="cards">
+  <div class="card">
+    <div class="stat">{{ total_monthly }}</div>
+    <div class="label">Total monthly depreciation (active assets)</div>
+  </div>
+  <div class="card">
+    <div class="stat">{{ asset_rows|length }}</div>
+    <div class="label">Depreciable assets</div>
+  </div>
+  <div class="card">
+    <div class="stat">{{ prepaid_rows|length }}</div>
+    <div class="label">Prepaid expense schedules</div>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>Add a Prepaid Expense</h2>
+  <p class="subtitle" style="margin-top:-6px;">For bulk purchases that should be expensed gradually — e.g. fertilizer bought for a 3-month supply allocates one third of its cost each month.</p>
+  <form method="post" action="{{ url_for('prepaid_expense_new') }}" class="form-grid" style="margin-top:14px;">
+    <div class="field" style="grid-column: span 2;">
+      <label>Description</label>
+      <input type="text" name="description" placeholder="e.g. Fertilizer - 3 month supply" required>
+    </div>
+    <div class="field">
+      <label>Category</label>
+      <input type="text" name="category" placeholder="e.g. Fertilizer">
+    </div>
+    <div class="field">
+      <label>Total Cost</label>
+      <input type="number" step="0.01" min="0.01" name="total_cost" required>
+    </div>
+    <div class="field">
+      <label>Start Date</label>
+      <input type="date" name="start_date" required>
+    </div>
+    <div class="field">
+      <label>Period Type</label>
+      <select name="period_type" required>
+        {% for t in depreciation_period_types %}
+        <option value="{{ t }}">{{ t }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="field">
+      <label>Number of Periods</label>
+      <input type="number" step="1" min="1" name="period_count" placeholder="e.g. 3" required>
+    </div>
+    <div class="field" style="align-self:end;">
+      <button class="btn" type="submit">Add Schedule</button>
+    </div>
+  </form>
+</div>
+
+<div class="panel">
+  <h2>Asset Depreciation</h2>
+  {% if asset_rows %}
+  <table>
+    <thead>
+      <tr>
+        <th>Asset</th><th>Cost</th><th>Monthly</th><th>Elapsed</th>
+        <th>Accumulated</th><th>Book Value</th><th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in asset_rows %}
+      <tr>
+        <td><a href="{{ url_for('asset_detail', asset_id=r['asset']['id']) }}">{{ r['asset']['name'] }}</a> <small>({{ r['asset']['asset_code'] }})</small></td>
+        <td>{{ r['asset']['purchase_cost'] }}</td>
+        <td>{{ r['dep']['monthly_amount'] }}</td>
+        <td>{{ r['dep']['months_elapsed'] }} / {{ r['asset']['depreciation_period_months'] }} mo.</td>
+        <td>{{ r['dep']['accumulated'] }}</td>
+        <td>{{ r['dep']['book_value'] }}</td>
+        <td>{% if r['dep']['fully_depreciated'] %}<span class="badge badge-completed">Fully depreciated</span>{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty-state">No depreciable assets — set purchase cost, purchase date, and a depreciation period on an asset to enable this.</div>
+  {% endif %}
+</div>
+
+<div class="panel">
+  <h2>Prepaid Expense Amortization</h2>
+  {% if prepaid_rows %}
+  <table>
+    <thead>
+      <tr>
+        <th>Description</th><th>Total Cost</th><th>Per Period</th><th>Elapsed</th>
+        <th>Accumulated</th><th>Remaining</th><th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in prepaid_rows %}
+      <tr>
+        <td>{{ r['prepaid']['description'] }} <small>({{ r['prepaid']['category'] or 'Uncategorized' }})</small></td>
+        <td>{{ r['prepaid']['total_cost'] }}</td>
+        <td>{{ r['per_period'] }} / {{ r['prepaid']['period_type'] }}</td>
+        <td>{{ r['periods_elapsed'] }} / {{ r['prepaid']['period_count'] }}</td>
+        <td>{{ r['accumulated'] }}</td>
+        <td>{{ r['remaining'] }}</td>
+        <td>
+          <form method="post" action="{{ url_for('prepaid_expense_delete', prepaid_id=r['prepaid']['id']) }}" onsubmit="return confirm('Remove this amortization schedule?');">
+            <button class="btn btn-danger btn-sm" type="submit">Delete</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty-state">No prepaid expense schedules yet.</div>
+  {% endif %}
+</div>
+{% endblock %}
