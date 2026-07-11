@@ -92,7 +92,7 @@ ADMIN_ONLY_PREFIXES = (
 # the app, and it is the only account that can reach User Management at all
 # once it exists — see _protected_account_exists() below for the bootstrap
 # exception that keeps a brand-new install from locking itself out.
-SUPER_ADMIN_USERNAME = "DKNS"
+SUPER_ADMIN_USERNAME = "Dhanu"
 
 # Endpoints that create/edit/disable/delete users or change passwords — once the
 # protected System Owner account exists, only that account may reach these.

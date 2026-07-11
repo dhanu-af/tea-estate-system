@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Break-glass recovery: reset (or create) the DKNS Super Admin account's
-password directly against your production Postgres database.
+"""Break-glass recovery: reset (or create) the Super Admin account's password
+directly against your production Postgres database.
 
-Use this only when you're locked out of the DKNS account -- this bypasses
-the app entirely, so run it yourself, from your own machine, against your
-own database. Never paste your POSTGRES_URL into a chat, ticket, or commit.
+Use this only when you're locked out of the Super Admin account -- this
+bypasses the app entirely, so run it yourself, from your own machine,
+against your own database. Never paste your POSTGRES_URL into a chat,
+ticket, or commit.
 
 Usage:
     1. Get your production connection string from Vercel -> your project ->
@@ -13,9 +14,10 @@ Usage:
     3. POSTGRES_URL="postgres://..." python scripts/reset_super_admin.py
     4. Enter a new password when prompted (input is hidden, not echoed).
 
-The script normalizes the username to exactly "DKNS", sets role=Admin and
-is_active=1, and hashes the password the same way the app does
-(werkzeug's generate_password_hash), so it works immediately with the
+The script normalizes the username to exactly the value of SUPER_ADMIN_USERNAME
+below (keep this in sync with app.py's own SUPER_ADMIN_USERNAME constant),
+sets role=Admin and is_active=1, and hashes the password the same way the app
+does (werkzeug's generate_password_hash), so it works immediately with the
 existing login form -- no other code changes needed.
 """
 import getpass
@@ -25,7 +27,7 @@ import sys
 import psycopg2
 from werkzeug.security import generate_password_hash
 
-SUPER_ADMIN_USERNAME = "DKNS"
+SUPER_ADMIN_USERNAME = "Dhanu"
 
 
 def main():
