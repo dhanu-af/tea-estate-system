@@ -81,18 +81,19 @@ a:hover { color: var(--accent-2); text-decoration: underline; }
   gap: 10px;
 }
 
-.sidebar .brand .logo-mark {
+.logo-mark {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 34px;
   height: 34px;
   border-radius: 10px;
-  background: linear-gradient(135deg, rgba(61, 220, 132, 0.22), rgba(45, 212, 191, 0.12));
-  border: 1px solid rgba(61, 220, 132, 0.3);
-  font-size: 1.1rem;
   flex-shrink: 0;
+  object-fit: contain;
+  background: #0a0e0d;
 }
+
+.auth-card .logo-mark { width: 48px; height: 48px; border-radius: 12px; }
 
 .sidebar .brand .brand-text { display: flex; flex-direction: column; line-height: 1.25; }
 .sidebar .brand span { display: block; font-size: 0.68rem; font-weight: 500; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; margin-top: 2px; }

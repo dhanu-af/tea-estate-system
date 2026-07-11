@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}DKNS Tea Lands · Tea Estate Management System{% endblock %}</title>
+  <link rel="icon" href="{{ url_for('static', filename='img/logo.png') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 </head>
@@ -12,7 +13,7 @@
   <div class="layout">
     <aside class="sidebar">
       <div class="brand">
-        <span class="logo-mark">🍃</span>
+        <img class="logo-mark" src="{{ url_for('static', filename='img/logo.png') }}" alt="DKNS logo">
         <span class="brand-text">DKNS Tea Lands<span>Tea Estate Management System</span></span>
       </div>
       <nav>

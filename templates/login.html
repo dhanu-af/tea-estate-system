@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Log in · DKNS Tea Lands</title>
+  <link rel="icon" href="{{ url_for('static', filename='img/logo.png') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
   <style>
     body { display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 20px; }
@@ -14,11 +15,16 @@
     .auth-card label { font-size: 0.82rem; font-weight: 600; color: var(--muted); margin-bottom: 5px; display: block; }
     .auth-card input { width: 100%; padding: 9px 10px; border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.9rem; }
     .auth-card .btn { width: 100%; text-align: center; }
+    .auth-card .brand-row { display: flex; align-items: center; gap: 12px; margin-bottom: 4px; }
+    .auth-card .brand-row h1 { margin: 0; }
   </style>
 </head>
 <body>
   <div class="auth-card">
-    <h1>🍃 DKNS Tea Lands</h1>
+    <div class="brand-row">
+      <img class="logo-mark" src="{{ url_for('static', filename='img/logo.png') }}" alt="DKNS logo">
+      <h1>DKNS Tea Lands</h1>
+    </div>
     <p class="sub">Sign in to continue.</p>
     {% with messages = get_flashed_messages(with_categories=true) %}
       {% if messages %}
