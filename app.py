@@ -215,7 +215,7 @@ def dashboard():
     today = request.args.get("today")
     from datetime import date
 
-    today = today or date.today().isoformat()
+    today = today or _colombo_today().isoformat()
 
     today_rows = conn.execute(
         "SELECT status, COUNT(*) AS c FROM attendance WHERE date = ? GROUP BY status",
@@ -770,8 +770,9 @@ def checkin(employee_number):
     if not employee:
         return render_template("checkin_result.html", employee=None), 404
 
-    today = datetime.now().date().isoformat()
-    now_time = datetime.now().strftime("%H:%M")
+    now = _colombo_now()
+    today = now.date().isoformat()
+    now_time = now.strftime("%H:%M")
 
     record = conn.execute(
         "SELECT * FROM attendance WHERE employee_id = ? AND date = ?", (employee["id"], today)
@@ -1218,6 +1219,14 @@ def _colombo_today():
     """'Today' as observed in Sri Lanka (UTC+5:30), regardless of the server's
     own timezone — pay cycles are defined by the Sri Lankan calendar week."""
     return datetime.now(SRI_LANKA_TZ).date()
+
+
+def _colombo_now():
+    """Current date and time of day in Sri Lanka (UTC+5:30) — used anywhere a
+    timestamp is recorded on the user's behalf (e.g. QR check-in/out), since
+    the server itself runs in UTC on Vercel and a naive datetime.now() would
+    otherwise be off by 5.5 hours from the employee's actual local time."""
+    return datetime.now(SRI_LANKA_TZ)
 
 
 def _week_bounds(d):
@@ -2292,7 +2301,7 @@ def _income_date_range():
     if view not in ("daily", "weekly", "monthly", "custom"):
         view = "daily"
 
-    today = date.today()
+    today = _colombo_today()
 
     if view == "custom":
         date_from = request.args.get("from", "").strip() or today.isoformat()
@@ -2871,7 +2880,7 @@ def invoice_new():
         date_to=date_to,
         uninvoiced=uninvoiced,
         default_price=selected_factory["default_price_per_kg"] if selected_factory else None,
-        today=date.today().isoformat(),
+        today=_colombo_today().isoformat(),
     )
 
 

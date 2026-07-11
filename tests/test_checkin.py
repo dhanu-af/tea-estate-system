@@ -29,9 +29,9 @@ def test_unknown_employee_number_returns_404(auth_client):
 
 
 def test_checkin_shows_todays_task(auth_client):
-    import datetime
+    import app as app_module
 
-    today = datetime.date.today().isoformat()
+    today = app_module._colombo_today().isoformat()
     auth_client.post("/employees/new", data={"full_name": "Alice"})
     auth_client.post(
         "/work-assignments/new",
